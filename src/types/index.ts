@@ -1,0 +1,260 @@
+import type { Context } from 'hono';
+import type { WebSocket } from 'ws';
+import type { Types } from 'mongoose';
+
+// ============================================================
+// User Types
+// ============================================================
+
+export interface IUser {
+  _id: Types.ObjectId;
+  email: string;
+  passwordHash: string;
+  emailVerified: boolean;
+  createdAt: Date;
+}
+
+export interface IEmailVerification {
+  _id: Types.ObjectId;
+  userId: Types.ObjectId;
+  codeHash: string;
+  expiresAt: Date;
+  createdAt: Date;
+}
+
+// ============================================================
+// Project Types
+// ============================================================
+
+export type CrawlStatus = 'idle' | 'pending' | 'crawling' | 'completed' | 'failed';
+
+export interface IProject {
+  _id: Types.ObjectId;
+  userId: Types.ObjectId;
+  name: string;
+  websiteUrl: string;
+  crawlStatus: CrawlStatus;
+  crawlError?: string;
+  lastCrawledAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface IApiKey {
+  _id: Types.ObjectId;
+  keyHash: string;
+  keyPrefix: string;
+  userId: Types.ObjectId;
+  projectId: Types.ObjectId;
+  name: string;
+  active: boolean;
+  createdAt: Date;
+}
+
+// ============================================================
+// Page & Embedding Types
+// ============================================================
+
+export interface IPage {
+  _id: Types.ObjectId;
+  projectId: Types.ObjectId;
+  url: string;
+  title: string;
+  content: string;
+  embedding: number[];
+  chunkIndex: number;
+  crawledAt: Date;
+}
+
+// ============================================================
+// Document Types (File Uploads)
+// ============================================================
+
+export type DocumentStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+export interface IDocument {
+  _id: Types.ObjectId;
+  projectId: Types.ObjectId;
+  fileName: string;
+  originalName: string;
+  mimeType: string;
+  fileSize: number;
+  blobUrl: string;
+  status: DocumentStatus;
+  errorMessage?: string;
+  extractedText?: string;
+  chunkCount: number;
+  processedAt?: Date;
+  createdAt: Date;
+}
+
+export interface IDocumentChunk {
+  _id: Types.ObjectId;
+  documentId: Types.ObjectId;
+  projectId: Types.ObjectId;
+  content: string;
+  chunkIndex: number;
+  embedding: number[];
+  metadata: {
+    fileName: string;
+    pageNumber?: number;
+    sheetName?: string;
+  };
+}
+
+export interface DocumentProcessingJob {
+  documentId: string;
+  projectId: string;
+  fileName: string;
+  blobUrl: string;
+  mimeType: string;
+}
+
+// ============================================================
+// Chat Types
+// ============================================================
+
+export type ChatTier = 'free' | 'pro';
+
+export interface IChatSession {
+  _id: Types.ObjectId;
+  projectId: Types.ObjectId;
+  apiKeyId: Types.ObjectId;
+  tier: ChatTier;
+  startedAt: Date;
+  endedAt?: Date;
+  totalTokens: number;
+  messageCount: number;
+}
+
+export type MessageRole = 'user' | 'assistant' | 'system';
+
+export interface IChatMessage {
+  _id: Types.ObjectId;
+  sessionId: Types.ObjectId;
+  role: MessageRole;
+  content: string;
+  tokenCount: number;
+  createdAt: Date;
+}
+
+// ============================================================
+// Credit Types
+// ============================================================
+
+export interface ICreditBalance {
+  _id: Types.ObjectId;
+  userId: Types.ObjectId;
+  balance: number;
+  updatedAt: Date;
+}
+
+export interface ICreditTransaction {
+  _id: Types.ObjectId;
+  userId: Types.ObjectId;
+  amount: number;
+  type: 'credit' | 'debit';
+  reason: string;
+  sessionId?: Types.ObjectId;
+  createdAt: Date;
+}
+
+// ============================================================
+// API Types
+// ============================================================
+
+export interface JwtPayload {
+  userId: string;
+  email: string;
+  iat?: number;
+  exp?: number;
+}
+
+export interface AuthContext extends Context {
+  user?: JwtPayload;
+}
+
+// ============================================================
+// WebSocket Types
+// ============================================================
+
+export interface WSClientMessage {
+  type: 'message';
+  content: string;
+}
+
+export interface WSChunkResponse {
+  type: 'chunk';
+  content: string;
+}
+
+export interface WSDoneResponse {
+  type: 'done';
+  tokensUsed: number;
+}
+
+export interface WSErrorResponse {
+  type: 'error';
+  message: string;
+  code?: string;
+}
+
+export type WSServerMessage = WSChunkResponse | WSDoneResponse | WSErrorResponse;
+
+export interface AuthenticatedWebSocket extends WebSocket {
+  apiKeyId: Types.ObjectId;
+  projectId: Types.ObjectId;
+  tier: ChatTier;
+  sessionId: Types.ObjectId;
+  isAlive: boolean;
+}
+
+// ============================================================
+// RAG Types
+// ============================================================
+
+export interface RetrievedContext {
+  content: string;
+  url: string;
+  title: string;
+  score: number;
+  source?: 'website' | 'document';
+  metadata?: {
+    fileName?: string;
+    pageNumber?: number;
+  };
+}
+
+export interface TierConfig {
+  contextChunks: number;
+  maxTokens: number;
+  messagesPerMin: number;
+}
+
+// ============================================================
+// Service Response Types
+// ============================================================
+
+export interface ServiceResult<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  code?: string;
+}
+
+// ============================================================
+// Crawl Types
+// ============================================================
+
+export interface CrawledPage {
+  url: string;
+  title: string;
+  markdown: string;
+}
+
+export interface ContentChunk {
+  content: string;
+  index: number;
+}
+
+
