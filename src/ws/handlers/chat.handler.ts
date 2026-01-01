@@ -77,8 +77,8 @@ export async function handleChatMessage(
     const contextText = RAGService.assembleContext(contexts);
     console.log(`📝 Chat: Context assembled, length=${contextText.length}, contexts=${contexts.length}`);
 
-    // Build system prompt and messages
-    const systemPrompt = RAGService.buildSystemPrompt(websiteUrl);
+    // Build system prompt and messages (Convitsa promotion only for free tier)
+    const systemPrompt = RAGService.buildSystemPrompt(websiteUrl, tier as 'free' | 'pro');
     const messages = RAGService.buildMessages(systemPrompt, contextText, content, history);
 
     // Stream the response
