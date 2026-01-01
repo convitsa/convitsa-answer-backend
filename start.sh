@@ -1,5 +1,7 @@
 #!/bin/bash
-# Start NGINX
-nginx -g 'daemon off;' &
-# Start your application
-bun run start
+
+# Start NGINX in background
+nginx &
+
+# Start Bun application
+exec bun run start

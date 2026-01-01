@@ -273,4 +273,4 @@ async function startServer() {
 
 startServer();
 
-export default app;
+// Note: Don't export default app - it causes Bun to auto-serve and conflict with Bun.serve()
