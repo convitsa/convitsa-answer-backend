@@ -220,56 +220,13 @@ export async function checkRateLimit(
 ): Promise<RateLimitResult> {
   const now = Date.now();
   
-  // Skip rate limiting in development for faster responses
-  if (env.NODE_ENV === 'development') {
-    return {
-      allowed: true,
-      remaining: limit - 1,
-      resetAt: now + windowSeconds * 1000,
-    };
-  }
-  
-  const client = getRedisClient();
-  const windowStart = now - windowSeconds * 1000;
-  const rateLimitKey = `ratelimit:${key}`;
-
-  try {
-    // For cluster, we need to use pipeline instead of multi for cross-slot operations
-    // But since all operations are on the same key, multi should work
-    const multi = client.multi();
-    
-    // Remove old entries outside the window
-    multi.zremrangebyscore(rateLimitKey, 0, windowStart);
-    
-    // Count current entries in window
-    multi.zcard(rateLimitKey);
-    
-    // Add current request
-    multi.zadd(rateLimitKey, now, `${now}-${Math.random()}`);
-    
-    // Set expiry on the key
-    multi.expire(rateLimitKey, windowSeconds);
-
-    const results = await multi.exec();
-    
-    if (!results) {
-      return { allowed: false, remaining: 0, resetAt: now + windowSeconds * 1000 };
-    }
-
-    const currentCount = (results[1]?.[1] as number) || 0;
-    const allowed = currentCount < limit;
-    const remaining = Math.max(0, limit - currentCount - 1);
-
-    return {
-      allowed,
-      remaining,
-      resetAt: now + windowSeconds * 1000,
-    };
-  } catch (error) {
-    console.error('Rate limit check failed:', error);
-    // On error, allow the request but don't cache
-    return { allowed: true, remaining: limit - 1, resetAt: now + windowSeconds * 1000 };
-  }
+  // Rate limiting disabled for performance - Redis cluster operations add too much latency
+  // Re-enable when using local/low-latency Redis or implement in-memory rate limiting
+  return {
+    allowed: true,
+    remaining: limit - 1,
+    resetAt: now + windowSeconds * 1000,
+  };
 }
 
 /**
