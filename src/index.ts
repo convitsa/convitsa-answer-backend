@@ -27,9 +27,7 @@ app.use('*', requestSizeLimit(1024 * 100)); // 100KB default, 55MB for document 
 app.use(
   '*',
   cors({
-    origin: env.NODE_ENV === 'production' 
-      ? ['https://framer.com', 'https://*.framer.com']
-      : '*',
+    origin: '*',
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
