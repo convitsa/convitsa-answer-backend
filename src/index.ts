@@ -28,7 +28,7 @@ app.use(
   '*',
   cors({
     origin: env.NODE_ENV === 'production' 
-      ? ['https://app.convitsa.com', 'https://convitsa.com']
+      ? ['https://framer.com', 'https://*.framer.com']
       : '*',
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
