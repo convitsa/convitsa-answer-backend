@@ -1,21 +1,33 @@
-# Build stage
-FROM oven/bun:1 AS builder
+# Use an official Node image that supports multi-arch (works on macOS and Linux)
+FROM node:22-slim
+# Install NGINX, Tini, and other required tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nginx \
+    ca-certificates \
+    curl && \
+    rm -rf /var/lib/apt/lists/*
 
+# Set working directory
 WORKDIR /app
 
-# Copy package files
-COPY package.json bun.lockb ./
+# Copy only package manifests first to take advantage of cached dependency installation
+COPY package.json bun.lock ./
 
-# Install dependencies
-RUN bun install --frozen-lockfile
 
-# Copy source
+
+# Install pnpm using corepack
+# Install bun
+RUN npm install --global bun@latest
+
+# Ensure bun is on PATH (usually already is after npm -g)
+ENV PATH="/usr/local/bin:${PATH}"
+
+# Install dependencies with bun
+RUN bun install
+
+
+# Copy the rest of the application (including .env)
 COPY . .
-
-# Production stage
-FROM oven/bun:1-slim AS production
-
-WORKDIR /app
 
 # Build arguments for environment variables
 ARG NODE_ENV=production
@@ -134,26 +146,22 @@ ENV FREE_MAX_MESSAGES_PER_SESSION=${FREE_MAX_MESSAGES_PER_SESSION}
 ENV RATE_LIMIT_FREE_MESSAGES_PER_MIN=${RATE_LIMIT_FREE_MESSAGES_PER_MIN}
 ENV RATE_LIMIT_PRO_MESSAGES_PER_MIN=${RATE_LIMIT_PRO_MESSAGES_PER_MIN}
 
-# Copy from builder
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/src ./src
-COPY --from=builder /app/tsconfig.json ./
+# Build the Next.js application
+RUN bun run build
 
-# Install curl for health check
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# Copy NGINX configuration
+RUN mkdir -p /etc/nginx/sites-available \
+    && mkdir -p /etc/nginx/sites-enabled \
+    && ln -s /etc/nginx/sites-available/app.conf /etc/nginx/sites-enabled/
 
-# Create non-root user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 bunjs
-USER bunjs
+COPY nginx.conf /etc/nginx/sites-available/app.conf
 
-# Expose port
-EXPOSE 3000
+# Expose required ports
+EXPOSE 3000 80 443
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:3000/api/v1/health || exit 1
+# Use a script to start both NGINX and your Node app
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
 
-# Start server
-CMD ["bun", "run", "src/index.ts"]
+# Change CMD to use the script
+CMD ["/start.sh"]
