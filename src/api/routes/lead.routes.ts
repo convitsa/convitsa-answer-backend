@@ -120,6 +120,57 @@ leads.post('/:projectId/leads', async (c) => {
 });
 
 /**
+ * GET /projects/:projectId/leads/stats
+ * Get lead statistics for a project
+ * NOTE: This MUST be defined before /:leadId to prevent "stats" matching as leadId
+ */
+leads.get('/:projectId/leads/stats', async (c) => {
+  const user = c.get('user');
+  const projectId = c.req.param('projectId');
+
+  // Verify ownership
+  const project = await verifyProjectOwnership(user.userId, projectId);
+  if (!project) {
+    return c.json({ error: 'Project not found', code: 'NOT_FOUND' }, 404);
+  }
+
+  const stats = await LeadService.getLeadStats(new Types.ObjectId(projectId));
+
+  return c.json({ stats });
+});
+
+/**
+ * POST /projects/:projectId/leads/export
+ * Export leads as CSV
+ * NOTE: This MUST be defined before /:leadId to prevent "export" matching as leadId
+ */
+leads.post('/:projectId/leads/export', async (c) => {
+  const user = c.get('user');
+  const projectId = c.req.param('projectId');
+
+  // Verify ownership
+  const project = await verifyProjectOwnership(user.userId, projectId);
+  if (!project) {
+    return c.json({ error: 'Project not found', code: 'NOT_FOUND' }, 404);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const { status, source } = body;
+
+  const csv = await LeadService.exportLeadsCSV(new Types.ObjectId(projectId), {
+    status,
+    source,
+  });
+
+  return new Response(csv, {
+    headers: {
+      'Content-Type': 'text/csv',
+      'Content-Disposition': `attachment; filename="leads-${projectId}-${Date.now()}.csv"`,
+    },
+  });
+});
+
+/**
  * GET /projects/:projectId/leads/:leadId
  * Get a single lead by ID
  */
@@ -241,55 +292,6 @@ leads.delete('/:projectId/leads/:leadId', async (c) => {
   await LeadService.deleteLead(new Types.ObjectId(leadId));
 
   return c.json({ message: 'Lead deleted successfully' });
-});
-
-/**
- * GET /projects/:projectId/leads/stats
- * Get lead statistics for a project
- */
-leads.get('/:projectId/leads/stats', async (c) => {
-  const user = c.get('user');
-  const projectId = c.req.param('projectId');
-
-  // Verify ownership
-  const project = await verifyProjectOwnership(user.userId, projectId);
-  if (!project) {
-    return c.json({ error: 'Project not found', code: 'NOT_FOUND' }, 404);
-  }
-
-  const stats = await LeadService.getLeadStats(new Types.ObjectId(projectId));
-
-  return c.json({ stats });
-});
-
-/**
- * POST /projects/:projectId/leads/export
- * Export leads as CSV
- */
-leads.post('/:projectId/leads/export', async (c) => {
-  const user = c.get('user');
-  const projectId = c.req.param('projectId');
-
-  // Verify ownership
-  const project = await verifyProjectOwnership(user.userId, projectId);
-  if (!project) {
-    return c.json({ error: 'Project not found', code: 'NOT_FOUND' }, 404);
-  }
-
-  const body = await c.req.json().catch(() => ({}));
-  const { status, source } = body;
-
-  const csv = await LeadService.exportLeadsCSV(new Types.ObjectId(projectId), {
-    status,
-    source,
-  });
-
-  return new Response(csv, {
-    headers: {
-      'Content-Type': 'text/csv',
-      'Content-Disposition': `attachment; filename="leads-${projectId}-${Date.now()}.csv"`,
-    },
-  });
 });
 
 export { leads as leadRoutes };

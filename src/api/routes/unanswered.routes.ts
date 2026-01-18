@@ -22,6 +22,26 @@ async function verifyProjectOwnership(userId: string, projectId: string) {
 }
 
 /**
+ * GET /projects/:projectId/questions/stats
+ * Get statistics for unanswered questions
+ * NOTE: This MUST be defined before /:questionId to prevent "stats" matching as questionId
+ */
+unanswered.get('/:projectId/questions/stats', async (c) => {
+  const user = c.get('user');
+  const projectId = c.req.param('projectId');
+
+  // Verify ownership
+  const project = await verifyProjectOwnership(user.userId, projectId);
+  if (!project) {
+    return c.json({ error: 'Project not found', code: 'NOT_FOUND' }, 404);
+  }
+
+  const stats = await UnansweredQuestionService.getStats(new Types.ObjectId(projectId));
+
+  return c.json({ stats });
+});
+
+/**
  * GET /projects/:projectId/questions
  * List unanswered questions for a project
  */
@@ -227,25 +247,6 @@ unanswered.delete('/:projectId/questions/:questionId', async (c) => {
   await UnansweredQuestionService.deleteQuestion(new Types.ObjectId(questionId));
 
   return c.json({ message: 'Question deleted successfully' });
-});
-
-/**
- * GET /projects/:projectId/questions/stats
- * Get statistics for unanswered questions
- */
-unanswered.get('/:projectId/questions/stats', async (c) => {
-  const user = c.get('user');
-  const projectId = c.req.param('projectId');
-
-  // Verify ownership
-  const project = await verifyProjectOwnership(user.userId, projectId);
-  if (!project) {
-    return c.json({ error: 'Project not found', code: 'NOT_FOUND' }, 404);
-  }
-
-  const stats = await UnansweredQuestionService.getStats(new Types.ObjectId(projectId));
-
-  return c.json({ stats });
 });
 
 export { unanswered as unansweredRoutes };
