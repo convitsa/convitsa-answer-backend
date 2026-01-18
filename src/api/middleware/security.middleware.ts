@@ -107,7 +107,7 @@ export function corsMiddleware(allowedOrigins: string[]) {
 
     if (origin && (allowedOrigins.includes('*') || allowedOrigins.includes(origin))) {
       c.header('Access-Control-Allow-Origin', origin);
-      c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
       c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
       c.header('Access-Control-Max-Age', '86400');
       c.header('Access-Control-Allow-Credentials', 'true');

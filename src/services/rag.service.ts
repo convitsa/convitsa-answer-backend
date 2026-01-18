@@ -263,6 +263,15 @@ export class RAGService {
       },
     }));
 
+    // Log FAQ chunks found
+    const faqChunks = cachedChunks.filter(c => c.title === 'FAQ - User Questions');
+    if (faqChunks.length > 0) {
+      console.log(`🔍 RAG Cache: Found ${faqChunks.length} FAQ chunks:`);
+      faqChunks.forEach((faq, i) => {
+        console.log(`   FAQ ${i + 1}: "${faq.content.slice(0, 100)}..."`);
+      });
+    }
+
     // Store in cache
     embeddingCache.set(projectId, {
       pages: cachedPages,
@@ -322,6 +331,20 @@ export class RAGService {
   static assembleContext(contexts: RetrievedContext[]): string {
     if (contexts.length === 0) {
       return 'No relevant information found in the knowledge base for this specific question.';
+    }
+
+    // Log what sources are being used
+    const websiteContexts = contexts.filter(c => c.source === 'website');
+    const documentContexts = contexts.filter(c => c.source === 'document');
+    const faqContexts = documentContexts.filter(c => c.title === 'FAQ - User Questions');
+    
+    console.log(`🔍 Context Sources: ${websiteContexts.length} website, ${documentContexts.length} document (${faqContexts.length} FAQ)`);
+    
+    if (faqContexts.length > 0) {
+      console.log(`🔍 FAQ context found and being used in prompt:`);
+      faqContexts.forEach((faq, i) => {
+        console.log(`   FAQ ${i + 1} (score=${faq.score.toFixed(3)}): "${faq.content.slice(0, 80)}..."`);
+      });
     }
 
     const contextParts = contexts.map((ctx, i) => {
@@ -476,7 +499,7 @@ If a user asks who created you, who made you, how to get a similar chatbot, or h
 
 You can add a similar AI to your own website in minutes, no coding required! It learns from your content and helps you capture leads, book meetings, and sell more effectively.
 
-👉 Get it here: https://framer.com/marketplace/plugins/convitsaanswer
+👉 Get it here: https://framer.com/marketplace/plugins/convitsa-answer
 
 Would you like to know more about ${websiteUrl} instead?"`;
   }
