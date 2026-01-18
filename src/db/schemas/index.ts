@@ -15,4 +15,7 @@ export {
 export { DocumentModel, type DocumentDocument } from './document.schema';
 export { DocumentChunk, type DocumentChunkDocument } from './document-chunk.schema';
 
-
+// Marketing AI schemas
+export { Lead, type LeadDocument } from './lead.schema';
+export { ConversionEvent, type ConversionEventDocument } from './conversion-event.schema';
+export { UnansweredQuestion, type UnansweredQuestionDocument } from './unanswered-question.schema';

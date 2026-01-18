@@ -1,7 +1,9 @@
 import { Hono } from 'hono';
 import { Types } from 'mongoose';
 import { authMiddleware } from '../middleware/auth.middleware';
-import { Project, ChatSession, ChatMessage, Page, ApiKey } from '../../db/schemas';
+import { Project, ChatSession, ChatMessage, Page, ApiKey, Lead, ConversionEvent, UnansweredQuestion } from '../../db/schemas';
+import { LeadService } from '../../services/lead.service';
+import { UnansweredQuestionService } from '../../services/unanswered-question.service';
 
 const analytics = new Hono();
 
@@ -233,6 +235,140 @@ analytics.get('/:id/sessions/:sessionId/messages', async (c) => {
   });
 });
 
+/**
+ * GET /projects/:id/analytics/marketing
+ * Get marketing analytics for a project (leads, conversions, unanswered questions)
+ */
+analytics.get('/:id/analytics/marketing', async (c) => {
+  const user = c.get('user');
+  const projectId = c.req.param('id');
+
+  // Verify ownership
+  const project = await Project.findOne({
+    _id: new Types.ObjectId(projectId),
+    userId: new Types.ObjectId(user.userId),
+  });
+
+  if (!project) {
+    return c.json({ error: 'Project not found', code: 'NOT_FOUND' }, 404);
+  }
+
+  const projectObjId = new Types.ObjectId(projectId);
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+  // Get lead and question stats
+  const [leadStats, questionStats, totalSessions, sessionsLast30Days] = await Promise.all([
+    LeadService.getLeadStats(projectObjId),
+    UnansweredQuestionService.getStats(projectObjId),
+    ChatSession.countDocuments({ projectId: projectObjId }),
+    ChatSession.countDocuments({
+      projectId: projectObjId,
+      startedAt: { $gte: thirtyDaysAgo },
+    }),
+  ]);
+
+  // Calculate conversion rate (leads captured / total sessions)
+  const conversionRate = totalSessions > 0 
+    ? ((leadStats.total / totalSessions) * 100).toFixed(2) 
+    : '0.00';
+
+  // Get conversion events timeline (last 30 days)
+  const eventsTimeline = await ConversionEvent.aggregate([
+    {
+      $match: {
+        projectId: projectObjId,
+        createdAt: { $gte: thirtyDaysAgo },
+      },
+    },
+    {
+      $group: {
+        _id: {
+          date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+          type: '$eventType',
+        },
+        count: { $sum: 1 },
+      },
+    },
+    { $sort: { '_id.date': 1 } },
+  ]);
+
+  // Get daily lead counts for the last 30 days
+  const dailyLeads = await Lead.aggregate([
+    {
+      $match: {
+        projectId: projectObjId,
+        capturedAt: { $gte: thirtyDaysAgo },
+      },
+    },
+    {
+      $group: {
+        _id: { $dateToString: { format: '%Y-%m-%d', date: '$capturedAt' } },
+        count: { $sum: 1 },
+      },
+    },
+    { $sort: { _id: 1 } },
+  ]);
+
+  // Get recent leads (last 5)
+  const recentLeads = await Lead.find({ projectId: projectObjId })
+    .sort({ capturedAt: -1 })
+    .limit(5)
+    .lean();
+
+  // Get recent unanswered questions (last 5 pending)
+  const recentQuestions = await UnansweredQuestion.find({
+    projectId: projectObjId,
+    status: 'pending',
+  })
+    .sort({ createdAt: -1 })
+    .limit(5)
+    .lean();
+
+  return c.json({
+    overview: {
+      totalLeads: leadStats.total,
+      leadsLast7Days: leadStats.last7Days,
+      leadsLast30Days: leadStats.last30Days,
+      totalConversations: totalSessions,
+      conversationsLast30Days: sessionsLast30Days,
+      conversionRate: `${conversionRate}%`,
+      pendingQuestions: questionStats.pending,
+      answeredQuestions: questionStats.answered,
+    },
+    leadsByStatus: leadStats.byStatus,
+    leadsBySource: leadStats.bySource,
+    questionStats: {
+      total: questionStats.total,
+      pending: questionStats.pending,
+      answered: questionStats.answered,
+      ignored: questionStats.ignored,
+      newThisWeek: questionStats.last7Days,
+    },
+    dailyLeads: dailyLeads.map((d) => ({
+      date: d._id,
+      leads: d.count,
+    })),
+    eventsTimeline: eventsTimeline.map((e) => ({
+      date: e._id.date,
+      type: e._id.type,
+      count: e.count,
+    })),
+    recentLeads: recentLeads.map((l) => ({
+      id: l._id.toString(),
+      email: l.email,
+      phone: l.phone,
+      name: l.name,
+      status: l.status,
+      capturedAt: l.capturedAt,
+    })),
+    recentQuestions: recentQuestions.map((q) => ({
+      id: q._id.toString(),
+      question: q.question.slice(0, 100) + (q.question.length > 100 ? '...' : ''),
+      createdAt: q.createdAt,
+    })),
+  });
+});
+
 export { analytics as analyticsRoutes };
-
-

@@ -36,6 +36,7 @@ export interface IProject {
   crawlStatus: CrawlStatus;
   crawlError?: string;
   lastCrawledAt?: Date;
+  marketingConfig?: MarketingConfig;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -255,6 +256,83 @@ export interface CrawledPage {
 export interface ContentChunk {
   content: string;
   index: number;
+}
+
+// ============================================================
+// Marketing AI Types
+// ============================================================
+
+export type LeadStatus = 'new' | 'contacted' | 'qualified' | 'converted';
+export type LeadSource = 'chat' | 'form';
+
+export interface ILead {
+  _id: Types.ObjectId;
+  projectId: Types.ObjectId;
+  sessionId?: Types.ObjectId;
+  email?: string;
+  phone?: string;
+  name?: string;
+  company?: string;
+  source: LeadSource;
+  status: LeadStatus;
+  notes?: string;
+  capturedAt: Date;
+  metadata?: Record<string, any>;
+}
+
+export type ConversionEventType = 'lead_captured' | 'meeting_booked' | 'link_clicked' | 'cta_clicked' | 'contact_clicked';
+
+export interface IConversionEvent {
+  _id: Types.ObjectId;
+  projectId: Types.ObjectId;
+  sessionId?: Types.ObjectId;
+  leadId?: Types.ObjectId;
+  eventType: ConversionEventType;
+  eventData?: Record<string, any>;
+  createdAt: Date;
+}
+
+export type UnansweredQuestionStatus = 'pending' | 'answered' | 'ignored';
+
+export interface IUnansweredQuestion {
+  _id: Types.ObjectId;
+  projectId: Types.ObjectId;
+  sessionId?: Types.ObjectId;
+  question: string;
+  aiResponse?: string;
+  status: UnansweredQuestionStatus;
+  businessAnswer?: string;
+  answeredBy?: Types.ObjectId;
+  answeredAt?: Date;
+  createdAt: Date;
+}
+
+export type AIPersonality = 'friendly_sales' | 'consultative' | 'urgency_driven';
+export type FallbackBehavior = 'book_meeting' | 'show_contacts' | 'both';
+
+export interface ContactOptions {
+  whatsapp?: string;
+  instagram?: string;
+  telegram?: string;
+  email?: string;
+  phone?: string;
+  custom?: Array<{ label: string; url: string; icon?: string }>;
+}
+
+export interface CTAButton {
+  label: string;
+  url: string;
+}
+
+export interface MarketingConfig {
+  aiPersonality: AIPersonality;
+  calendlyUrl?: string;
+  webhookUrl?: string;
+  notifyEmail?: string;
+  ctaButtons?: CTAButton[];
+  leadCaptureFields: ('email' | 'phone' | 'name' | 'company')[];
+  contactOptions?: ContactOptions;
+  fallbackBehavior: FallbackBehavior;
 }
 
 

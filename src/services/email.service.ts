@@ -502,6 +502,64 @@ export class EmailService {
   }
 
   /**
+   * Send new lead notification email
+   */
+  static async sendNewLeadEmail(
+    to: string,
+    projectName: string,
+    email?: string,
+    phone?: string,
+    name?: string
+  ): Promise<void> {
+    try {
+      const leadInfo: string[] = [];
+      if (name) leadInfo.push(`<strong>Name:</strong> ${name}`);
+      if (email) leadInfo.push(`<strong>Email:</strong> ${email}`);
+      if (phone) leadInfo.push(`<strong>Phone:</strong> ${phone}`);
+
+      await resend.emails.send({
+        from: env.RESEND_FROM_EMAIL,
+        to,
+        subject: `🎯 New lead captured on "${projectName}"!`,
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          </head>
+          <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
+              <h1 style="color: white; margin: 0; font-size: 28px;">New Lead Captured! 🎯</h1>
+            </div>
+            <div style="background: #ffffff; padding: 40px 30px; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 10px 10px;">
+              <h2 style="color: #333; margin-top: 0;">Great news!</h2>
+              <p>Your AI chatbot on <strong>${projectName}</strong> just captured a new lead.</p>
+              <div style="background: #f0fdf4; border: 1px solid #10b981; border-radius: 8px; padding: 20px; margin: 30px 0;">
+                ${leadInfo.map(info => `<p style="margin: 8px 0; color: #059669;">${info}</p>`).join('')}
+                <p style="margin: 8px 0 0 0; color: #666; font-size: 12px;">Captured at: ${new Date().toLocaleString()}</p>
+              </div>
+              <p>Follow up with this lead quickly to maximize your conversion rate!</p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="https://app.convitsa.com/dashboard" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold;">View Lead Details</a>
+              </div>
+            </div>
+            <div style="text-align: center; padding: 20px; color: #999; font-size: 12px;">
+              <p>&copy; ${new Date().getFullYear()} Convitsa Answer. All rights reserved.</p>
+            </div>
+          </body>
+          </html>
+        `,
+        text: `New lead captured on ${projectName}!\n\n${name ? `Name: ${name}\n` : ''}${email ? `Email: ${email}\n` : ''}${phone ? `Phone: ${phone}\n` : ''}\nCaptured at: ${new Date().toLocaleString()}\n\nView details at https://app.convitsa.com/dashboard`,
+      });
+
+      console.log(`✉️ New lead email sent to ${to}`);
+    } catch (error) {
+      console.error('Failed to send new lead email:', error);
+    }
+  }
+
+  /**
    * Send API key created email
    */
   static async sendApiKeyCreatedEmail(to: string, keyName: string, keyPrefix: string): Promise<void> {

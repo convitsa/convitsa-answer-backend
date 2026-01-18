@@ -1,5 +1,5 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
-import type { IProject, CrawlStatus } from '../../types';
+import type { IProject, CrawlStatus, AIPersonality, FallbackBehavior } from '../../types';
 
 export interface ProjectDocument extends Omit<IProject, '_id'>, Document {}
 
@@ -33,6 +33,52 @@ const projectSchema = new Schema<ProjectDocument>(
     lastCrawledAt: {
       type: Date,
       default: undefined,
+    },
+    marketingConfig: {
+      aiPersonality: {
+        type: String,
+        enum: ['friendly_sales', 'consultative', 'urgency_driven'] as AIPersonality[],
+        default: 'friendly_sales',
+      },
+      calendlyUrl: {
+        type: String,
+        trim: true,
+      },
+      webhookUrl: {
+        type: String,
+        trim: true,
+      },
+      notifyEmail: {
+        type: String,
+        trim: true,
+        lowercase: true,
+      },
+      ctaButtons: [{
+        label: { type: String, required: true },
+        url: { type: String, required: true },
+      }],
+      leadCaptureFields: {
+        type: [String],
+        enum: ['email', 'phone', 'name', 'company'],
+        default: ['email', 'name'],
+      },
+      contactOptions: {
+        whatsapp: { type: String, trim: true },
+        instagram: { type: String, trim: true },
+        telegram: { type: String, trim: true },
+        email: { type: String, trim: true },
+        phone: { type: String, trim: true },
+        custom: [{
+          label: { type: String, required: true },
+          url: { type: String, required: true },
+          icon: { type: String },
+        }],
+      },
+      fallbackBehavior: {
+        type: String,
+        enum: ['book_meeting', 'show_contacts', 'both'] as FallbackBehavior[],
+        default: 'both',
+      },
     },
     createdAt: {
       type: Date,

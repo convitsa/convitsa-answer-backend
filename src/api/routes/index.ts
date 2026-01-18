@@ -7,6 +7,8 @@ import { analyticsRoutes } from './analytics.routes';
 import { feedbackRoutes } from './feedback.routes';
 import { documentRoutes } from './document.routes';
 import { webhookRoutes } from './webhook.routes';
+import { leadRoutes } from './lead.routes';
+import { unansweredRoutes } from './unanswered.routes';
 import { authRateLimit, signupRateLimit, apiRateLimit } from '../middleware/rate-limit.middleware';
 
 const api = new Hono();
@@ -43,6 +45,8 @@ protectedRoutes.route('/users', userRoutes);
 protectedRoutes.route('/projects', projectRoutes);
 protectedRoutes.route('/projects', analyticsRoutes); // /projects/:id/analytics, /projects/:id/sessions
 protectedRoutes.route('/projects', documentRoutes); // /projects/:id/documents
+protectedRoutes.route('/projects', leadRoutes); // /projects/:id/leads
+protectedRoutes.route('/projects', unansweredRoutes); // /projects/:id/questions
 protectedRoutes.route('/api-keys', apiKeyRoutes);
 
 api.route('/', protectedRoutes);

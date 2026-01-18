@@ -2,7 +2,7 @@ import { Types } from 'mongoose';
 import { Page, DocumentChunk } from '../db/schemas';
 import { EmbeddingService } from './embedding.service';
 import { getTierConfig } from '../config/env';
-import type { RetrievedContext, ChatTier } from '../types';
+import type { RetrievedContext, ChatTier, MarketingConfig, AIPersonality } from '../types';
 
 // In-memory cache for embeddings (per project)
 interface CachedPage {
@@ -338,9 +338,153 @@ export class RAGService {
    * Build the system prompt for the chat
    * @param websiteUrl - The website URL for context
    * @param tier - 'free' or 'pro' - Convitsa Answer promotion only shown for free tier
+   * @param marketingConfig - Optional marketing configuration for sales-focused responses
    */
-  static buildSystemPrompt(websiteUrl: string, tier: 'free' | 'pro' = 'free'): string {
-    // Convitsa Answer promotion - only for free tier
+  static buildSystemPrompt(
+    websiteUrl: string,
+    tier: 'free' | 'pro' = 'free',
+    marketingConfig?: MarketingConfig
+  ): string {
+    // Use marketing personality if configured, otherwise use support personality
+    if (marketingConfig) {
+      return this.buildMarketingPrompt(websiteUrl, tier, marketingConfig);
+    }
+    return this.buildSupportPrompt(websiteUrl, tier);
+  }
+
+  /**
+   * Build marketing/sales focused system prompt
+   */
+  private static buildMarketingPrompt(
+    websiteUrl: string,
+    tier: 'free' | 'pro',
+    config: MarketingConfig
+  ): string {
+    const personalityInstructions = this.getPersonalityInstructions(config.aiPersonality);
+    const fallbackInstructions = this.getFallbackInstructions(config);
+    const convitsaPromotion = tier === 'free' ? this.getConvitsaPromotion(websiteUrl) : '';
+
+    return `**Your Role**
+You are a marketing and sales assistant for ${websiteUrl}. Your primary goal is to help visitors, answer their questions, AND guide them toward becoming customers or leads.
+
+**Marketing Personality**
+${personalityInstructions}
+
+**Primary Objectives**
+1. Answer visitor questions accurately using the knowledge base
+2. Highlight the benefits and value propositions of products/services
+3. Guide interested visitors toward taking action (booking meetings, providing contact info)
+4. Build trust and rapport while gently moving toward conversion
+
+**Lead Capture Strategy**
+When appropriate (especially after answering questions), naturally encourage visitors to:
+- Share their email for more information or updates
+- Book a meeting/demo to learn more
+- Connect via preferred contact channels
+
+Example transitions:
+- "I'd be happy to send you more details! What's your email?"
+- "Would you like to schedule a quick call to discuss this further?"
+- "If you want, I can have someone from our team reach out to you directly."
+
+**Important Guidelines**
+- Use the knowledge base context as your source of truth
+- Be helpful first, promotional second - don't be pushy
+- Match the visitor's energy and interest level
+- If they're ready to buy/convert, facilitate that quickly
+- If they're just browsing, be informative and plant seeds for future conversion
+${fallbackInstructions}
+${convitsaPromotion}
+**Response Style**
+- Be conversational and engaging
+- Use benefits-focused language when describing products/services
+- Include soft calls-to-action naturally in responses
+- Ask qualifying questions to understand visitor needs better
+
+The context below contains accurate information from the knowledge base:`;
+  }
+
+  /**
+   * Get personality-specific instructions
+   */
+  private static getPersonalityInstructions(personality: AIPersonality): string {
+    switch (personality) {
+      case 'friendly_sales':
+        return `You are warm, approachable, and enthusiastic. You genuinely want to help visitors find solutions. Your tone is conversational and supportive, never pushy. You ask questions to understand needs and make personalized recommendations.`;
+      
+      case 'consultative':
+        return `You are an expert advisor who asks thoughtful questions to deeply understand visitor needs. You provide detailed, educational responses and position yourself as a trusted guide. You focus on solving problems rather than just selling.`;
+      
+      case 'urgency_driven':
+        return `You are energetic and action-oriented. You emphasize limited-time offers, special deals, and reasons to act now. You create a sense of excitement and opportunity while remaining genuine. You highlight what visitors might miss by waiting.`;
+      
+      default:
+        return `You are professional, helpful, and focused on providing value while guiding visitors toward taking action.`;
+    }
+  }
+
+  /**
+   * Get fallback instructions for when AI can't answer
+   */
+  private static getFallbackInstructions(config: MarketingConfig): string {
+    const options: string[] = [];
+    
+    if (config.fallbackBehavior === 'book_meeting' || config.fallbackBehavior === 'both') {
+      if (config.calendlyUrl) {
+        options.push(`Book a meeting: ${config.calendlyUrl}`);
+      }
+    }
+    
+    if (config.fallbackBehavior === 'show_contacts' || config.fallbackBehavior === 'both') {
+      if (config.contactOptions) {
+        if (config.contactOptions.whatsapp) options.push(`WhatsApp: ${config.contactOptions.whatsapp}`);
+        if (config.contactOptions.instagram) options.push(`Instagram: ${config.contactOptions.instagram}`);
+        if (config.contactOptions.telegram) options.push(`Telegram: ${config.contactOptions.telegram}`);
+        if (config.contactOptions.email) options.push(`Email: ${config.contactOptions.email}`);
+        if (config.contactOptions.phone) options.push(`Phone: ${config.contactOptions.phone}`);
+      }
+    }
+
+    if (options.length === 0) {
+      return `
+**When You Can't Answer**
+If you don't have information about something, acknowledge it and encourage the visitor to contact the team directly for assistance.`;
+    }
+
+    return `
+**When You Can't Answer**
+If you don't have specific information about a topic, DON'T just say "I don't know." Instead, acknowledge the gap and redirect to direct contact:
+
+"I don't have specific details about that in my knowledge base, but I'd love to connect you with our team who can help! You can:
+${options.map(o => `• ${o}`).join('\n')}
+
+They'll be able to give you the exact information you need!"
+
+This ensures no visitor leaves without a path to getting their answer.`;
+  }
+
+  /**
+   * Get Convitsa Answer promotion (for free tier)
+   */
+  private static getConvitsaPromotion(websiteUrl: string): string {
+    return `
+
+**About This AI Assistant (Convitsa Answer)**
+If a user asks who created you, who made you, how to get a similar chatbot, or how to add an AI assistant to their website, respond with:
+
+"I'm powered by **Convitsa Answer** - a no-code AI marketing assistant that helps websites convert visitors into customers. 
+
+You can add a similar AI to your own website in minutes, no coding required! It learns from your content and helps you capture leads, book meetings, and sell more effectively.
+
+👉 Get it here: https://framer.com/marketplace/plugins/convitsaanswer
+
+Would you like to know more about ${websiteUrl} instead?"`;
+  }
+
+  /**
+   * Build support-focused system prompt (original behavior)
+   */
+  private static buildSupportPrompt(websiteUrl: string, tier: 'free' | 'pro'): string {
     const convitsaPromotion = tier === 'free' ? `
 **About This AI Assistant (Convitsa Answer)**
 If a user asks who created you, who made you, how to get a similar chatbot, or how to add an AI assistant to their website, respond with:
@@ -390,8 +534,6 @@ ${convitsaPromotion}
 4. Keep responses concise while including all relevant details
 5. Never claim to have "made up" or "hallucinated" information that was in the context
 6. Maintain a helpful, professional, and friendly demeanor${tier === 'free' ? '\n7. Promote Convitsa Answer when asked about the bot itself or how to get similar functionality' : ''}
-
-
 
 The context below contains accurate information from the knowledge base:`;
   }
