@@ -2,6 +2,7 @@ import { Types } from 'mongoose';
 import { UnansweredQuestion, DocumentChunk, Project } from '../db/schemas';
 import type { IUnansweredQuestion, UnansweredQuestionStatus, MarketingConfig } from '../types';
 import { EmbeddingService } from './embedding.service';
+import { RAGService } from './rag.service';
 import { chunkText } from '../utils/helpers';
 
 export interface UnansweredQuestionFilters {
@@ -132,15 +133,20 @@ export class UnansweredQuestionService {
     // Create knowledge base entry from the Q&A
     const knowledgeContent = `Q: ${question.question}\nA: ${businessAnswer}`;
     
+    console.log(`📝 Creating FAQ entry: Q=${question.question.slice(0, 30)}... A=${businessAnswer.slice(0, 30)}...`);
+    
     // Chunk the content (usually small, so likely 1 chunk)
     const chunks = chunkText(knowledgeContent, 500, 50);
+    console.log(`📝 Created ${chunks.length} chunk(s) from FAQ`);
 
     // Generate embeddings and store
     for (let i = 0; i < chunks.length; i++) {
       const chunkContent = chunks[i];
+      console.log(`📝 Generating embedding for chunk ${i + 1}/${chunks.length}...`);
       const embedding = await EmbeddingService.generateEmbedding(chunkContent);
+      console.log(`📝 Embedding generated, length=${embedding.length}`);
       
-      await DocumentChunk.create({
+      const chunk = await DocumentChunk.create({
         documentId: questionId, // Use question ID as document reference
         projectId: question.projectId,
         content: chunkContent,
@@ -152,7 +158,11 @@ export class UnansweredQuestionService {
           sheetName: undefined,
         },
       });
+      console.log(`📝 Saved chunk to DocumentChunk collection with id=${chunk._id}`);
     }
+
+    // Invalidate RAG cache so the new FAQ is immediately searchable
+    RAGService.invalidateCache(question.projectId.toString());
 
     console.log(`✅ Answered question and added to knowledge base: "${question.question.slice(0, 50)}..."`);
 
