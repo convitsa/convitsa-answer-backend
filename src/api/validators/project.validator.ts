@@ -15,6 +15,34 @@ export const createProjectSchema = z.object({
     ),
 });
 
+// Marketing config schema
+const contactOptionsSchema = z.object({
+  whatsapp: z.string().optional(),
+  instagram: z.string().optional(),
+  telegram: z.string().optional(),
+  email: z.string().email().optional(),
+  phone: z.string().optional(),
+  custom: z.array(z.object({
+    label: z.string(),
+    url: z.string().url(),
+    icon: z.string().optional(),
+  })).optional(),
+}).optional();
+
+const marketingConfigSchema = z.object({
+  aiPersonality: z.enum(['friendly_sales', 'consultative', 'urgency_driven']).optional(),
+  calendlyUrl: z.string().url().optional().or(z.literal('')),
+  webhookUrl: z.string().url().optional().or(z.literal('')),
+  notifyEmail: z.string().email().optional().or(z.literal('')),
+  ctaButtons: z.array(z.object({
+    label: z.string(),
+    url: z.string().url(),
+  })).optional(),
+  leadCaptureFields: z.array(z.enum(['email', 'phone', 'name', 'company'])).optional(),
+  contactOptions: contactOptionsSchema,
+  fallbackBehavior: z.enum(['book_meeting', 'show_contacts', 'both']).optional(),
+}).optional();
+
 export const updateProjectSchema = z.object({
   name: z
     .string()
@@ -30,6 +58,7 @@ export const updateProjectSchema = z.object({
       'URL must start with http:// or https://'
     )
     .optional(),
+  marketingConfig: marketingConfigSchema,
 });
 
 export const createApiKeySchema = z.object({

@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { Project, ApiKey, Page, ChatSession, ChatMessage, User } from '../db/schemas';
-import type { IProject, IApiKey, ServiceResult, CrawlStatus } from '../types';
+import type { IProject, IApiKey, ServiceResult, CrawlStatus, MarketingConfig } from '../types';
 import { generateApiKey, hashSHA256, isValidUrl } from '../utils/helpers';
 import { EmailService } from './email.service';
 
@@ -12,6 +12,7 @@ export interface CreateProjectInput {
 export interface UpdateProjectInput {
   name?: string;
   websiteUrl?: string;
+  marketingConfig?: Partial<MarketingConfig>;
 }
 
 export interface ProjectWithStats extends Omit<IProject, '_id'> {
@@ -164,9 +165,36 @@ export class ProjectService {
         };
       }
 
-      const updateData: Partial<IProject> = {};
+      const updateData: Record<string, any> = {};
       if (input.name) updateData.name = input.name.trim();
       if (input.websiteUrl) updateData.websiteUrl = input.websiteUrl.trim();
+      
+      // Handle marketingConfig update (merge with existing)
+      if (input.marketingConfig) {
+        const existingProject = await Project.findOne({
+          _id: new Types.ObjectId(projectId),
+          userId: new Types.ObjectId(userId),
+        }).lean();
+
+        if (!existingProject) {
+          return {
+            success: false,
+            error: 'Project not found',
+            code: 'NOT_FOUND',
+          };
+        }
+
+        // Merge existing config with new config
+        const existingConfig = (existingProject.marketingConfig as MarketingConfig) || {};
+        updateData.marketingConfig = {
+          ...existingConfig,
+          ...input.marketingConfig,
+          // Deep merge contactOptions if provided
+          contactOptions: input.marketingConfig.contactOptions 
+            ? { ...existingConfig.contactOptions, ...input.marketingConfig.contactOptions }
+            : existingConfig.contactOptions,
+        };
+      }
 
       const project = await Project.findOneAndUpdate(
         {
