@@ -2,7 +2,7 @@ import { WebSocket } from 'ws';
 import { Types } from 'mongoose';
 import { RAGService } from '../../services/rag.service';
 import { ChatService } from '../../services/chat.service';
-import { CreditService } from '../../services/credit.service';
+import { SubscriptionService } from '../../services/subscription.service';
 import { LeadService } from '../../services/lead.service';
 import { UnansweredQuestionService } from '../../services/unanswered-question.service';
 import { ChatSession, ChatMessage, Project } from '../../db/schemas';
@@ -13,6 +13,7 @@ import type {
   WSDoneResponse,
   WSErrorResponse,
   MarketingConfig,
+  ChatTier,
 } from '../../types';
 
 // Store conversation history per session (in-memory for simplicity)
@@ -44,16 +45,23 @@ export async function handleChatMessage(
   const tier = ws.tier;
 
   try {
-    // For Pro tier, check if user has credits
-    if (tier === 'pro') {
-      const hasCredits = await CreditService.hasCredits(userId);
-      if (!hasCredits) {
-        sendError(ws, ChatService.getNoCreditsMessage(), 'NO_CREDITS');
-        return;
-      }
+    // Check if user has tokens remaining in their subscription
+    const hasTokens = await SubscriptionService.hasTokensRemaining(userId);
+    if (!hasTokens) {
+      const stats = await SubscriptionService.getUsageStats(userId);
+      sendError(
+        ws,
+        `You've used all ${stats.effectiveLimit.toLocaleString()} tokens for this month. ${
+          stats.tier === 'free' 
+            ? 'Upgrade to Pro for more tokens!' 
+            : 'Your tokens will reset at the start of your next billing period.'
+        }`,
+        'NO_TOKENS'
+      );
+      return;
     }
 
-    // For Free tier, check message limit per session
+    // For Free tier, also check message limit per session
     if (tier === 'free') {
       const config = getTierConfig('free');
       const session = await ChatSession.findById(ws.sessionId).select('messageCount').lean();
@@ -110,7 +118,7 @@ export async function handleChatMessage(
     console.log(`📝 Chat: Context assembled, length=${contextText.length}, contexts=${contexts.length}`);
 
     // Build system prompt and messages (pass marketing config)
-    const systemPrompt = RAGService.buildSystemPrompt(websiteUrl, tier as 'free' | 'pro', marketingConfig);
+    const systemPrompt = RAGService.buildSystemPrompt(websiteUrl, tier as ChatTier, marketingConfig);
     const messages = RAGService.buildMessages(systemPrompt, contextText, content, history);
     
     // Check if this might be an unanswered question (no context found)
@@ -169,9 +177,9 @@ export async function handleChatMessage(
         }
         conversationHistory.set(sessionId, history);
 
-        // For Pro tier, deduct credits based on actual token usage
-        if (tier === 'pro' && totalTokens > 0) {
-          await CreditService.deductCredits(userId, totalTokens, sessionId, 'Chat completion');
+        // Deduct tokens from subscription (all tiers track usage)
+        if (totalTokens > 0) {
+          await SubscriptionService.deductTokens(userId, totalTokens, sessionId, 'Chat completion');
         }
 
         // Track unanswered questions if AI couldn't answer

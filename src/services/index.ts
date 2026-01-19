@@ -6,6 +6,7 @@ export { EmbeddingService } from './embedding.service';
 export { RAGService } from './rag.service';
 export { ChatService } from './chat.service';
 export { CreditService } from './credit.service';
+export { SubscriptionService } from './subscription.service';
 
 // Marketing AI services
 export { LeadService } from './lead.service';

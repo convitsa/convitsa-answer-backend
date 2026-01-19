@@ -112,10 +112,48 @@ export interface DocumentProcessingJob {
 }
 
 // ============================================================
+// Subscription Types
+// ============================================================
+
+export type SubscriptionTier = 'free' | 'pro' | 'business';
+export type SubscriptionStatus = 'active' | 'cancelled' | 'past_due' | 'paused' | 'trialing';
+
+export interface ISubscription {
+  _id: Types.ObjectId;
+  userId: Types.ObjectId;
+  tier: SubscriptionTier;
+  status: SubscriptionStatus;
+  lemonSqueezyCustomerId?: string;
+  lemonSqueezySubscriptionId?: string;
+  lemonSqueezyVariantId?: string;
+  currentPeriodStart: Date;
+  currentPeriodEnd: Date;
+  cancelAtPeriodEnd: boolean;
+  tokensUsedThisMonth: number;
+  tokensLimit: number;
+  projectsLimit: number;
+  // Migration fields for credit users
+  migratedFromCredits?: number;
+  bonusTokens: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface SubscriptionPlan {
+  tier: SubscriptionTier;
+  name: string;
+  price: number; // Monthly price in USD
+  tokensPerMonth: number;
+  projectsLimit: number;
+  maxMessagesPerSession: number | null;
+  features: string[];
+}
+
+// ============================================================
 // Chat Types
 // ============================================================
 
-export type ChatTier = 'free' | 'pro';
+export type ChatTier = 'free' | 'pro' | 'business';
 
 export interface IChatSession {
   _id: Types.ObjectId;

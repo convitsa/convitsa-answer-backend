@@ -64,9 +64,28 @@ const envSchema = z.object({
   MAX_FILES_PER_PROJECT: z.string().default('100').transform(Number),
   MAX_STORAGE_PER_PROJECT_MB: z.string().default('500').transform(Number),
 
-  // Gumroad (for payment webhooks)
+  // Gumroad (for payment webhooks) - DEPRECATED, kept for backwards compatibility
   GUMROAD_SELLER_ID: z.string().optional(),
-  GUMROAD_WEBHOOK_TOKEN: z.string().min(16, 'GUMROAD_WEBHOOK_TOKEN must be at least 16 characters'),
+  GUMROAD_WEBHOOK_TOKEN: z.string().optional(),
+
+  // Lemon Squeezy (for subscription payments)
+  LEMONSQUEEZY_API_KEY: z.string().min(1, 'LEMONSQUEEZY_API_KEY is required'),
+  LEMONSQUEEZY_STORE_ID: z.string().min(1, 'LEMONSQUEEZY_STORE_ID is required'),
+  LEMONSQUEEZY_WEBHOOK_SECRET: z.string().min(16, 'LEMONSQUEEZY_WEBHOOK_SECRET must be at least 16 characters'),
+
+  // Subscription Plan Configuration (tokens per month)
+  FREE_TOKENS_PER_MONTH: z.string().default('10000').transform(Number),
+  PRO_TOKENS_PER_MONTH: z.string().default('100000').transform(Number),
+  BUSINESS_TOKENS_PER_MONTH: z.string().default('500000').transform(Number),
+
+  // Project Limits per Tier
+  FREE_PROJECTS_LIMIT: z.string().default('1').transform(Number),
+  PRO_PROJECTS_LIMIT: z.string().default('5').transform(Number),
+  BUSINESS_PROJECTS_LIMIT: z.string().default('999').transform(Number), // Effectively unlimited
+
+  // Lemon Squeezy Variant IDs (for checkout)
+  LEMONSQUEEZY_PRO_VARIANT_ID: z.string().optional(),
+  LEMONSQUEEZY_BUSINESS_VARIANT_ID: z.string().optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
@@ -85,7 +104,7 @@ function loadEnv(): EnvConfig {
 
 export const env = loadEnv();
 
-// Tier configuration helpers
+// Tier configuration helpers (chat settings)
 export const tierConfig = {
   free: {
     contextChunks: env.FREE_CONTEXT_CHUNKS,
@@ -99,9 +118,72 @@ export const tierConfig = {
     messagesPerMin: env.RATE_LIMIT_PRO_MESSAGES_PER_MIN,
     maxMessagesPerSession: null, // Unlimited for Pro
   },
+  business: {
+    contextChunks: env.PRO_CONTEXT_CHUNKS, // Same as Pro
+    maxTokens: env.PRO_MAX_TOKENS, // Same as Pro
+    messagesPerMin: env.RATE_LIMIT_PRO_MESSAGES_PER_MIN * 2, // 2x rate limit
+    maxMessagesPerSession: null, // Unlimited
+  },
 } as const;
 
-export function getTierConfig(tier: 'free' | 'pro') {
+export function getTierConfig(tier: 'free' | 'pro' | 'business') {
   return tierConfig[tier];
 }
 
+// Subscription plan configuration
+export const subscriptionPlans = {
+  free: {
+    tier: 'free' as const,
+    name: 'Free',
+    price: 0,
+    tokensPerMonth: env.FREE_TOKENS_PER_MONTH,
+    projectsLimit: env.FREE_PROJECTS_LIMIT,
+    maxMessagesPerSession: env.FREE_MAX_MESSAGES_PER_SESSION,
+    features: [
+      'Basic AI chat',
+      '10,000 tokens/month',
+      '1 project',
+      '15 messages per session',
+      'Community support',
+    ],
+  },
+  pro: {
+    tier: 'pro' as const,
+    name: 'Pro',
+    price: 29,
+    tokensPerMonth: env.PRO_TOKENS_PER_MONTH,
+    projectsLimit: env.PRO_PROJECTS_LIMIT,
+    maxMessagesPerSession: null,
+    features: [
+      'Marketing AI personality',
+      '100,000 tokens/month',
+      '5 projects',
+      'Unlimited messages per session',
+      'Lead capture & tracking',
+      'Unanswered questions management',
+      'Custom contact options',
+      'Email support',
+    ],
+  },
+  business: {
+    tier: 'business' as const,
+    name: 'Business',
+    price: 79,
+    tokensPerMonth: env.BUSINESS_TOKENS_PER_MONTH,
+    projectsLimit: env.BUSINESS_PROJECTS_LIMIT,
+    maxMessagesPerSession: null,
+    features: [
+      'All Pro features',
+      '500,000 tokens/month',
+      'Unlimited projects',
+      'Priority support',
+      'Custom AI training',
+      'Webhook integrations',
+      'Advanced analytics',
+    ],
+  },
+} as const;
+
+export function getSubscriptionPlan(tier: 'free' | 'pro' | 'business') {
+  return subscriptionPlans[tier];
+}

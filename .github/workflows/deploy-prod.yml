@@ -94,6 +94,17 @@ jobs:
             --build-arg FREE_MAX_MESSAGES_PER_SESSION="${{ secrets.FREE_MAX_MESSAGES_PER_SESSION }}" \
             --build-arg RATE_LIMIT_FREE_MESSAGES_PER_MIN="${{ secrets.RATE_LIMIT_FREE_MESSAGES_PER_MIN }}" \
             --build-arg RATE_LIMIT_PRO_MESSAGES_PER_MIN="${{ secrets.RATE_LIMIT_PRO_MESSAGES_PER_MIN }}" \
+            --build-arg LEMON_SQUEEZY_STORE_ID="${{ secrets.LEMON_SQUEEZY_STORE_ID }}" \
+            --build-arg LEMON_SQUEEZY_PRO_VARIANT_ID="${{ secrets.LEMON_SQUEEZY_PRO_VARIANT_ID }}" \
+            --build-arg LEMON_SQUEEZY_BUSINESS_VARIANT_ID="${{ secrets.LEMON_SQUEEZY_BUSINESS_VARIANT_ID }}" \
+            --build-arg LEMON_SQUEEZY_API_KEY="${{ secrets.LEMON_SQUEEZY_API_KEY }}" \
+            --build-arg LEMON_SQUEEZY_WEBHOOK_SECRET="${{ secrets.LEMON_SQUEEZY_WEBHOOK_SECRET }}" \
+            --build-arg LEMON_SQUEEZY_FREE_TOKENS_PER_MONTH="${{ vars.LEMON_SQUEEZY_FREE_TOKENS_PER_MONTH }}" \
+            --build-arg LEMON_SQUEEZY_PRO_TOKENS_PER_MONTH="${{ vars.LEMON_SQUEEZY_PRO_TOKENS_PER_MONTH }}" \
+            --build-arg LEMON_SQUEEZY_BUSINESS_TOKENS_PER_MONTH="${{ vars.LEMON_SQUEEZY_BUSINESS_TOKENS_PER_MONTH }}" \
+            --build-arg LEMON_SQUEEZY_FREE_PROJECTS_LIMIT="${{ vars.LEMON_SQUEEZY_FREE_PROJECTS_LIMIT }}" \
+            --build-arg LEMON_SQUEEZY_PRO_PROJECTS_LIMIT="${{ vars.LEMON_SQUEEZY_PRO_PROJECTS_LIMIT }}" \
+            --build-arg LEMON_SQUEEZY_BUSINESS_PROJECTS_LIMIT="${{ vars.LEMON_SQUEEZY_BUSINESS_PROJECTS_LIMIT }}" \
             -t ${{ steps.names.outputs.image_tag }} \
             -f Dockerfile .
 

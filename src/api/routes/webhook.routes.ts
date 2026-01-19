@@ -1,7 +1,10 @@
 import { Hono } from 'hono';
-import { User, CreditBalance, CreditTransaction } from '../../db/schemas';
-import { env } from '../../config/env';
+import crypto from 'crypto';
+import { User, CreditBalance, CreditTransaction, Subscription } from '../../db/schemas';
+import { env, getSubscriptionPlan } from '../../config/env';
 import { EmailService } from '../../services/email.service';
+import { SubscriptionService } from '../../services/subscription.service';
+import type { SubscriptionTier } from '../../types';
 
 const webhooks = new Hono();
 
@@ -193,12 +196,266 @@ webhooks.post('/gumroad', async (c) => {
 webhooks.get('/gumroad/test', (c) => {
   return c.json({
     status: 'ok',
-    message: 'Gumroad webhook endpoint is active',
+    message: 'Gumroad webhook endpoint is active (DEPRECATED)',
     packages: {
       '$9': '500 credits',
       '$15': '1000 credits',
       '$25': '2000 credits',
       '$49': '5000 credits',
+    },
+  });
+});
+
+// ============================================================
+// LEMON SQUEEZY WEBHOOKS
+// ============================================================
+
+/**
+ * Lemon Squeezy variant ID to tier mapping
+ */
+function getTierFromVariantId(variantId: string): SubscriptionTier {
+  if (variantId === env.LEMONSQUEEZY_PRO_VARIANT_ID) return 'pro';
+  if (variantId === env.LEMONSQUEEZY_BUSINESS_VARIANT_ID) return 'business';
+  return 'free';
+}
+
+/**
+ * Verify Lemon Squeezy webhook signature
+ */
+function verifyLemonSqueezySignature(payload: string, signature: string): boolean {
+  const hmac = crypto.createHmac('sha256', env.LEMONSQUEEZY_WEBHOOK_SECRET);
+  const digest = hmac.update(payload).digest('hex');
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
+}
+
+/**
+ * POST /webhooks/lemonsqueezy
+ * Handle Lemon Squeezy subscription webhooks
+ * 
+ * Events:
+ * - subscription_created: New subscription
+ * - subscription_updated: Plan change, renewal
+ * - subscription_cancelled: Cancellation requested
+ * - subscription_resumed: Reactivated after cancellation
+ * - subscription_expired: Subscription ended
+ * - subscription_paused: Subscription paused
+ * - subscription_unpaused: Subscription unpaused
+ * - subscription_payment_success: Successful payment
+ * - subscription_payment_failed: Failed payment
+ */
+webhooks.post('/lemonsqueezy', async (c) => {
+  try {
+    // Get raw body for signature verification
+    const rawBody = await c.req.text();
+    const signature = c.req.header('x-signature') || '';
+
+    // Verify webhook signature
+    if (!verifyLemonSqueezySignature(rawBody, signature)) {
+      console.error('❌ Lemon Squeezy webhook: Invalid signature');
+      return c.json({ error: 'Invalid signature' }, 401);
+    }
+
+    // Parse webhook payload
+    const payload = JSON.parse(rawBody);
+    const { meta, data } = payload;
+
+    const eventName = meta.event_name;
+    const customData = meta.custom_data || {};
+    
+    console.log(`🍋 Lemon Squeezy webhook: ${eventName}`, {
+      subscriptionId: data.id,
+      customerId: data.attributes?.customer_id,
+      userEmail: customData.user_email,
+    });
+
+    // Get user email from custom data (passed during checkout)
+    const userEmail = customData.user_email?.toLowerCase().trim();
+    if (!userEmail) {
+      console.error('❌ Lemon Squeezy webhook: No user email in custom_data');
+      return c.json({ error: 'Missing user email' }, 400);
+    }
+
+    // Find user
+    const user = await User.findOne({ email: userEmail }).lean();
+    if (!user) {
+      console.error(`❌ Lemon Squeezy webhook: User not found for ${userEmail}`);
+      return c.json({ error: 'User not found' }, 404);
+    }
+
+    const userId = user._id.toString();
+    const attributes = data.attributes || {};
+
+    // Extract subscription details
+    const subscriptionId = data.id?.toString();
+    const customerId = attributes.customer_id?.toString();
+    const variantId = attributes.variant_id?.toString();
+    const status = attributes.status;
+    const renewsAt = attributes.renews_at ? new Date(attributes.renews_at) : null;
+    const endsAt = attributes.ends_at ? new Date(attributes.ends_at) : null;
+    const cancelledAt = attributes.cancelled ? new Date() : null;
+
+    // Determine tier from variant
+    const tier = getTierFromVariantId(variantId || '');
+
+    switch (eventName) {
+      case 'subscription_created': {
+        // New subscription created
+        const plan = getSubscriptionPlan(tier);
+        const periodEnd = renewsAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+        await SubscriptionService.createSubscription(userId, {
+          tier,
+          lemonSqueezyCustomerId: customerId,
+          lemonSqueezySubscriptionId: subscriptionId,
+          lemonSqueezyVariantId: variantId,
+          currentPeriodEnd: periodEnd,
+        });
+
+        console.log(`✅ Subscription created for ${userEmail}: ${tier}`);
+        
+        // Send welcome email
+        EmailService.sendWelcomeEmail(userEmail).catch((err) => {
+          console.error('Failed to send welcome email:', err);
+        });
+        break;
+      }
+
+      case 'subscription_updated': {
+        // Subscription updated (could be plan change)
+        const plan = getSubscriptionPlan(tier);
+        const periodEnd = renewsAt || endsAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+        await SubscriptionService.updateSubscription(userId, {
+          tier,
+          lemonSqueezyVariantId: variantId,
+          currentPeriodEnd: periodEnd,
+          status: status === 'active' ? 'active' : 'paused',
+        });
+
+        console.log(`✅ Subscription updated for ${userEmail}: ${tier}`);
+        break;
+      }
+
+      case 'subscription_cancelled': {
+        // User cancelled - will end at period end
+        await SubscriptionService.updateSubscription(userId, {
+          cancelAtPeriodEnd: true,
+        });
+
+        console.log(`⚠️ Subscription cancelled for ${userEmail} (ends at period end)`);
+        break;
+      }
+
+      case 'subscription_resumed': {
+        // Subscription reactivated
+        await SubscriptionService.updateSubscription(userId, {
+          status: 'active',
+          cancelAtPeriodEnd: false,
+        });
+
+        console.log(`✅ Subscription resumed for ${userEmail}`);
+        break;
+      }
+
+      case 'subscription_expired': {
+        // Subscription ended - downgrade to free
+        const freePlan = getSubscriptionPlan('free');
+        
+        await SubscriptionService.updateSubscription(userId, {
+          tier: 'free',
+          status: 'active',
+          cancelAtPeriodEnd: false,
+        });
+
+        // Reset to free tier limits
+        await Subscription.findOneAndUpdate(
+          { userId: user._id },
+          {
+            $set: {
+              tokensLimit: freePlan.tokensPerMonth,
+              projectsLimit: freePlan.projectsLimit,
+              tokensUsedThisMonth: 0,
+            },
+          }
+        );
+
+        console.log(`⚠️ Subscription expired for ${userEmail}, downgraded to free`);
+        break;
+      }
+
+      case 'subscription_paused': {
+        await SubscriptionService.updateSubscription(userId, {
+          status: 'paused',
+        });
+
+        console.log(`⏸️ Subscription paused for ${userEmail}`);
+        break;
+      }
+
+      case 'subscription_unpaused': {
+        await SubscriptionService.updateSubscription(userId, {
+          status: 'active',
+        });
+
+        console.log(`▶️ Subscription unpaused for ${userEmail}`);
+        break;
+      }
+
+      case 'subscription_payment_success': {
+        // Payment successful - reset monthly usage for new period
+        const periodEnd = renewsAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+        await SubscriptionService.updateSubscription(userId, {
+          status: 'active',
+          currentPeriodStart: new Date(),
+          currentPeriodEnd: periodEnd,
+        });
+
+        // Reset monthly tokens
+        await Subscription.findOneAndUpdate(
+          { userId: user._id },
+          { $set: { tokensUsedThisMonth: 0 } }
+        );
+
+        console.log(`💳 Payment successful for ${userEmail}, usage reset`);
+        break;
+      }
+
+      case 'subscription_payment_failed': {
+        await SubscriptionService.updateSubscription(userId, {
+          status: 'past_due',
+        });
+
+        console.log(`❌ Payment failed for ${userEmail}`);
+
+        // TODO: Send payment failed email
+        break;
+      }
+
+      default:
+        console.log(`🍋 Unhandled Lemon Squeezy event: ${eventName}`);
+    }
+
+    return c.json({ success: true, event: eventName });
+
+  } catch (error) {
+    console.error('❌ Lemon Squeezy webhook error:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+/**
+ * GET /webhooks/lemonsqueezy/test
+ * Test endpoint to verify webhook is accessible
+ */
+webhooks.get('/lemonsqueezy/test', (c) => {
+  return c.json({
+    status: 'ok',
+    message: 'Lemon Squeezy webhook endpoint is active',
+    plans: {
+      free: '$0/mo - 10,000 tokens',
+      pro: '$29/mo - 100,000 tokens',
+      business: '$79/mo - 500,000 tokens',
     },
   });
 });

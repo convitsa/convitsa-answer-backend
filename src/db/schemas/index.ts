@@ -15,6 +15,9 @@ export {
 export { DocumentModel, type DocumentDocument } from './document.schema';
 export { DocumentChunk, type DocumentChunkDocument } from './document-chunk.schema';
 
+// Subscription schema
+export { Subscription, type SubscriptionDocument } from './subscription.schema';
+
 // Marketing AI schemas
 export { Lead, type LeadDocument } from './lead.schema';
 export { ConversionEvent, type ConversionEventDocument } from './conversion-event.schema';

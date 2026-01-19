@@ -360,12 +360,12 @@ export class RAGService {
   /**
    * Build the system prompt for the chat
    * @param websiteUrl - The website URL for context
-   * @param tier - 'free' or 'pro' - Convitsa Answer promotion only shown for free tier
+   * @param tier - 'free', 'pro', or 'business' - Convitsa Answer promotion only shown for free tier
    * @param marketingConfig - Optional marketing configuration for sales-focused responses
    */
   static buildSystemPrompt(
     websiteUrl: string,
-    tier: 'free' | 'pro' = 'free',
+    tier: 'free' | 'pro' | 'business' = 'free',
     marketingConfig?: MarketingConfig
   ): string {
     // Use marketing personality if configured, otherwise use support personality
@@ -380,7 +380,7 @@ export class RAGService {
    */
   private static buildMarketingPrompt(
     websiteUrl: string,
-    tier: 'free' | 'pro',
+    tier: 'free' | 'pro' | 'business',
     config: MarketingConfig
   ): string {
     const personalityInstructions = this.getPersonalityInstructions(config.aiPersonality);
@@ -507,7 +507,7 @@ Would you like to know more about ${websiteUrl} instead?"`;
   /**
    * Build support-focused system prompt (original behavior)
    */
-  private static buildSupportPrompt(websiteUrl: string, tier: 'free' | 'pro'): string {
+  private static buildSupportPrompt(websiteUrl: string, tier: 'free' | 'pro' | 'business'): string {
     const convitsaPromotion = tier === 'free' ? `
 **About This AI Assistant (Convitsa Answer)**
 If a user asks who created you, who made you, how to get a similar chatbot, or how to add an AI assistant to their website, respond with:
