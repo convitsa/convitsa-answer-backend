@@ -26,12 +26,10 @@ const subscriptionSchema = new Schema<SubscriptionDocument>(
     lemonSqueezyCustomerId: {
       type: String,
       trim: true,
-      sparse: true,
     },
     lemonSqueezySubscriptionId: {
       type: String,
       trim: true,
-      sparse: true,
     },
     lemonSqueezyVariantId: {
       type: String,

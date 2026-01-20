@@ -46,6 +46,11 @@ const envSchema = z.object({
   // Pricing Configuration
   TOKENS_PER_CREDIT: z.string().default('1000').transform(Number),
   PLATFORM_COMMISSION_PERCENT: z.string().default('25').transform(Number), // 25% commission
+  
+  // Token Conversion: How many OpenAI tokens = 1 Convitsa token
+  // Default: 30 OpenAI tokens = 1 Convitsa token (optimized for 60% profit margin)
+  // So a message using 2500 OpenAI tokens = ~83 Convitsa tokens
+  OPENAI_TO_CONVITSA_RATE: z.string().default('30').transform(Number),
 
   // Crawl Configuration
   CRAWL_MAX_PAGES: z.string().default('20').transform(Number),
@@ -73,10 +78,11 @@ const envSchema = z.object({
   LEMONSQUEEZY_STORE_ID: z.string().min(1, 'LEMONSQUEEZY_STORE_ID is required'),
   LEMONSQUEEZY_WEBHOOK_SECRET: z.string().min(16, 'LEMONSQUEEZY_WEBHOOK_SECRET must be at least 16 characters'),
 
-  // Subscription Plan Configuration (tokens per month)
-  FREE_TOKENS_PER_MONTH: z.string().default('10000').transform(Number),
+  // Subscription Plan Configuration (Convitsa tokens per month)
+  // Optimized for 60% profit margin with rate 30
+  FREE_TOKENS_PER_MONTH: z.string().default('5000').transform(Number),
   PRO_TOKENS_PER_MONTH: z.string().default('100000').transform(Number),
-  BUSINESS_TOKENS_PER_MONTH: z.string().default('500000').transform(Number),
+  BUSINESS_TOKENS_PER_MONTH: z.string().default('250000').transform(Number),
 
   // Project Limits per Tier
   FREE_PROJECTS_LIMIT: z.string().default('1').transform(Number),
@@ -130,20 +136,25 @@ export function getTierConfig(tier: 'free' | 'pro' | 'business') {
   return tierConfig[tier];
 }
 
-// Subscription plan configuration
+// Helper to format numbers with commas
+function formatNumber(num: number): string {
+  return num.toLocaleString('en-US');
+}
+
+// Subscription plan configuration (all token values are Convitsa tokens)
 export const subscriptionPlans = {
   free: {
     tier: 'free' as const,
     name: 'Free',
     price: 0,
-    tokensPerMonth: env.FREE_TOKENS_PER_MONTH,
+    tokensPerMonth: env.FREE_TOKENS_PER_MONTH, // Convitsa tokens
     projectsLimit: env.FREE_PROJECTS_LIMIT,
     maxMessagesPerSession: env.FREE_MAX_MESSAGES_PER_SESSION,
     features: [
       'Basic AI chat',
-      '10,000 tokens/month',
-      '1 project',
-      '15 messages per session',
+      `${formatNumber(env.FREE_TOKENS_PER_MONTH)} Convitsa tokens/month`,
+      `${env.FREE_PROJECTS_LIMIT} project`,
+      `${env.FREE_MAX_MESSAGES_PER_SESSION} messages per session`,
       'Community support',
     ],
   },
@@ -151,13 +162,13 @@ export const subscriptionPlans = {
     tier: 'pro' as const,
     name: 'Pro',
     price: 29,
-    tokensPerMonth: env.PRO_TOKENS_PER_MONTH,
+    tokensPerMonth: env.PRO_TOKENS_PER_MONTH, // Convitsa tokens
     projectsLimit: env.PRO_PROJECTS_LIMIT,
     maxMessagesPerSession: null,
     features: [
       'Marketing AI personality',
-      '100,000 tokens/month',
-      '5 projects',
+      `${formatNumber(env.PRO_TOKENS_PER_MONTH)} Convitsa tokens/month`,
+      `${env.PRO_PROJECTS_LIMIT} projects`,
       'Unlimited messages per session',
       'Lead capture & tracking',
       'Unanswered questions management',
@@ -169,12 +180,12 @@ export const subscriptionPlans = {
     tier: 'business' as const,
     name: 'Business',
     price: 79,
-    tokensPerMonth: env.BUSINESS_TOKENS_PER_MONTH,
+    tokensPerMonth: env.BUSINESS_TOKENS_PER_MONTH, // Convitsa tokens
     projectsLimit: env.BUSINESS_PROJECTS_LIMIT,
     maxMessagesPerSession: null,
     features: [
       'All Pro features',
-      '500,000 tokens/month',
+      `${formatNumber(env.BUSINESS_TOKENS_PER_MONTH)} Convitsa tokens/month`,
       'Unlimited projects',
       'Priority support',
       'Custom AI training',
@@ -182,8 +193,23 @@ export const subscriptionPlans = {
       'Advanced analytics',
     ],
   },
-} as const;
+};
 
 export function getSubscriptionPlan(tier: 'free' | 'pro' | 'business') {
   return subscriptionPlans[tier];
+}
+
+/**
+ * Convert OpenAI tokens to Convitsa tokens
+ * Default: 100 OpenAI tokens = 1 Convitsa token
+ */
+export function openAIToConvitsaTokens(openAITokens: number): number {
+  return Math.ceil(openAITokens / env.OPENAI_TO_CONVITSA_RATE);
+}
+
+/**
+ * Convert Convitsa tokens to OpenAI tokens (for display/estimation)
+ */
+export function convitsaToOpenAITokens(convitsaTokens: number): number {
+  return convitsaTokens * env.OPENAI_TO_CONVITSA_RATE;
 }

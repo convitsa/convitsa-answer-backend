@@ -87,6 +87,7 @@ jobs:
             --build-arg MAX_WS_CONNECTIONS_PER_KEY="${{ secrets.MAX_WS_CONNECTIONS_PER_KEY }}" \
             --build-arg TOKENS_PER_CREDIT="${{ vars.TOKENS_PER_CREDIT }}" \
             --build-arg PLATFORM_COMMISSION_PERCENT="${{ vars.PLATFORM_COMMISSION_PERCENT }}" \
+            --build-arg OPENAI_TO_CONVITSA_RATE="${{ vars.OPENAI_TO_CONVITSA_RATE }}" \
             --build-arg FREE_CONTEXT_CHUNKS="${{ secrets.FREE_CONTEXT_CHUNKS }}" \
             --build-arg PRO_CONTEXT_CHUNKS="${{ secrets.PRO_CONTEXT_CHUNKS }}" \
             --build-arg FREE_MAX_TOKENS="${{ secrets.FREE_MAX_TOKENS }}" \

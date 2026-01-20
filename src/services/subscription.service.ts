@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { Subscription, User, Project } from '../db/schemas';
-import { getSubscriptionPlan, env } from '../config/env';
+import { getSubscriptionPlan, env, openAIToConvitsaTokens } from '../config/env';
 import { EmailService } from './email.service';
 import type { ISubscription, SubscriptionTier, SubscriptionStatus, ServiceResult } from '../types';
 
@@ -240,25 +240,37 @@ export class SubscriptionService {
 
   /**
    * Deduct tokens from user's monthly usage
+   * @param userId - User ID
+   * @param openAITokens - Raw OpenAI tokens from the API response
+   * @param sessionId - Optional session ID for tracking
+   * @param reason - Reason for deduction
+   * 
+   * Note: openAITokens are converted to Convitsa tokens before deduction
+   * Default rate: 100 OpenAI tokens = 1 Convitsa token
    */
   static async deductTokens(
     userId: string,
-    tokens: number,
+    openAITokens: number,
     sessionId?: string,
     reason: string = 'Chat usage'
-  ): Promise<ServiceResult<{ tokensDeducted: number; tokensRemaining: number }>> {
+  ): Promise<ServiceResult<{ tokensDeducted: number; tokensRemaining: number; openAITokensUsed: number }>> {
     try {
+      // Convert OpenAI tokens to Convitsa tokens
+      const convitsaTokens = openAIToConvitsaTokens(openAITokens);
+      
+      console.log(`📊 Token conversion: ${openAITokens} OpenAI tokens → ${convitsaTokens} Convitsa tokens`);
+
       const subscription = await this.getSubscription(userId);
       const effectiveLimit = subscription.tokensLimit + subscription.bonusTokens;
       const tokensRemaining = Math.max(0, effectiveLimit - subscription.tokensUsedThisMonth);
 
       // Deduct what we can (don't go over limit)
-      const tokensToDeduct = Math.min(tokens, tokensRemaining);
+      const tokensToDeduct = Math.min(convitsaTokens, tokensRemaining);
 
       if (tokensToDeduct <= 0) {
         return {
           success: true,
-          data: { tokensDeducted: 0, tokensRemaining: 0 },
+          data: { tokensDeducted: 0, tokensRemaining: 0, openAITokensUsed: openAITokens },
         };
       }
 
@@ -274,7 +286,7 @@ export class SubscriptionService {
 
       const newRemaining = Math.max(0, effectiveLimit - (result?.tokensUsedThisMonth || 0));
 
-      console.log(`📊 Deducted ${tokensToDeduct} tokens for user ${userId}. Remaining: ${newRemaining}`);
+      console.log(`📊 Deducted ${tokensToDeduct} Convitsa tokens for user ${userId}. Remaining: ${newRemaining}`);
 
       // Send low tokens warning if needed
       this.checkAndSendLowTokensWarning(userId, result as ISubscription).catch((err) => {
@@ -286,6 +298,7 @@ export class SubscriptionService {
         data: {
           tokensDeducted: tokensToDeduct,
           tokensRemaining: newRemaining,
+          openAITokensUsed: openAITokens,
         },
       };
     } catch (error) {
