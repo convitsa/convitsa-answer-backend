@@ -1,9 +1,40 @@
 import { Hono } from 'hono';
 import crypto from 'crypto';
+import bcrypt from 'bcrypt';
 import { User, CreditBalance, CreditTransaction, Subscription } from '../../db/schemas';
 import { env, getSubscriptionPlan } from '../../config/env';
-import { EmailService, SubscriptionService, MagicLinkService } from '../../services';
+import { EmailService, SubscriptionService } from '../../services';
 import type { SubscriptionTier } from '../../types';
+
+/**
+ * Generate a simple, easy-to-type random password
+ * Format: 3 consonants + 3 digits + 4 consonants (e.g., "Kmr492Pxwt")
+ */
+function generateSimplePassword(): string {
+  const consonants = 'bcdfghjkmnpqrstvwxyz';
+  const vowels = 'aeiou';
+  const digits = '0123456789';
+  
+  // Start with uppercase consonant
+  let password = consonants[Math.floor(Math.random() * consonants.length)].toUpperCase();
+  
+  // Add 2 more lowercase consonants
+  for (let i = 0; i < 2; i++) {
+    password += consonants[Math.floor(Math.random() * consonants.length)];
+  }
+  
+  // Add 3 digits
+  for (let i = 0; i < 3; i++) {
+    password += digits[Math.floor(Math.random() * digits.length)];
+  }
+  
+  // Add 4 more lowercase consonants
+  for (let i = 0; i < 4; i++) {
+    password += consonants[Math.floor(Math.random() * consonants.length)];
+  }
+  
+  return password;
+}
 
 const webhooks = new Hono();
 
@@ -306,20 +337,26 @@ webhooks.post('/lemonsqueezy', async (c) => {
     
     // If user still not found, create a new one (for affiliate/direct Lemon Squeezy purchases)
     const finalEmail = customUserEmail || lsCustomerEmail;
+    let generatedPassword: string | null = null;
+    
     if (!user && finalEmail && eventName === 'subscription_created') {
       console.log(`📝 Creating new user for payment: ${finalEmail}`);
       
+      // Generate a simple random password
+      generatedPassword = generateSimplePassword();
+      const passwordHash = await bcrypt.hash(generatedPassword, 10);
+      
       const newUser = await User.create({
         email: finalEmail,
+        passwordHash,
         emailVerified: true, // They paid, trust the email
         createdVia: 'payment',
-        // passwordHash is not set - user will set via magic link
       });
       
       user = newUser.toObject();
       isNewUser = true;
       
-      console.log(`✅ New user created: ${finalEmail}`);
+      console.log(`✅ New user created: ${finalEmail} (password generated)`);
     }
     
     if (!user) {
@@ -363,25 +400,16 @@ webhooks.post('/lemonsqueezy', async (c) => {
         console.log(`✅ Subscription created for ${resolvedEmail}: ${tier}${bonusTokens > 0 ? ` (+${bonusTokens} bonus tokens)` : ''}`);
         
         // Handle email sending based on whether user is new or existing
-        if (isNewUser) {
-          // New user from payment - send magic link to set password
-          const magicLinkResult = await MagicLinkService.create(userId);
-          
-          if (magicLinkResult.success) {
-            const magicUrl = `${env.PASSWORD_SETUP_URL}/${magicLinkResult.data!.token}`;
-            
-            // Send payment welcome email with magic link
-            EmailService.sendPaymentWelcomeEmail(
-              resolvedEmail,
-              magicUrl,
-              plan.name,
-              bonusTokens
-            ).catch((err) => {
-              console.error('Failed to send payment welcome email:', err);
-            });
-          } else {
-            console.error('Failed to create magic link:', magicLinkResult.error);
-          }
+        if (isNewUser && generatedPassword) {
+          // New user from payment - send welcome email with generated password
+          EmailService.sendPaymentWelcomeEmail(
+            resolvedEmail,
+            generatedPassword,
+            plan.name,
+            bonusTokens
+          ).catch((err) => {
+            console.error('Failed to send payment welcome email:', err);
+          });
         } else {
           // Existing user - send regular subscription started email
           EmailService.sendSubscriptionStartedEmail(
@@ -501,6 +529,12 @@ webhooks.post('/lemonsqueezy', async (c) => {
         // Payment successful - reset monthly usage for new period
         const periodEnd = renewsAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
+        // Check if this is the first payment (subscription just created)
+        // by looking at when the subscription was created
+        const existingSub = await Subscription.findOne({ userId: user._id }).lean();
+        const isFirstPayment = existingSub && 
+          (Date.now() - new Date(existingSub.createdAt).getTime()) < 5 * 60 * 1000; // Within 5 minutes
+
         await SubscriptionService.updateSubscription(userId, {
           status: 'active',
           currentPeriodStart: new Date(),
@@ -514,10 +548,11 @@ webhooks.post('/lemonsqueezy', async (c) => {
           { new: true }
         ).lean();
 
-        console.log(`💳 Payment successful for ${resolvedEmail}, usage reset`);
+        console.log(`💳 Payment successful for ${resolvedEmail}, usage reset${isFirstPayment ? ' (first payment, skipping renewal email)' : ''}`);
         
-        // Send renewal email
-        if (paymentSub) {
+        // Only send renewal email for actual renewals (not first payment)
+        // First payment already gets a welcome email from subscription_created
+        if (paymentSub && !isFirstPayment) {
           const renewPlan = getSubscriptionPlan(paymentSub.tier as SubscriptionTier);
           EmailService.sendSubscriptionRenewedEmail(
             resolvedEmail,
