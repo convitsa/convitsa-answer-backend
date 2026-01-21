@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
-import { AuthService } from '../../services/auth.service';
+import { z } from 'zod';
+import { AuthService, MagicLinkService } from '../../services';
 import { validate } from '../middleware/validate.middleware';
 import {
   signupSchema,
@@ -19,6 +20,11 @@ import {
 } from '../validators/auth.validator';
 import { canResendVerification, setVerificationCooldown } from '../../db/redis';
 import { User } from '../../db/schemas';
+
+// Magic link set password schema
+const setPasswordViaMagicLinkSchema = z.object({
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+});
 
 const auth = new Hono();
 
@@ -172,6 +178,99 @@ auth.post('/reset-password', validate(resetPasswordSchema), async (c) => {
   }
 
   return c.json({ message: 'Password reset successful' });
+});
+
+// ============================================================
+// Magic Link Routes (for payment-created users)
+// ============================================================
+
+/**
+ * GET /auth/magic/:token
+ * Validate a magic link token
+ * Frontend calls this to check if the link is valid before showing password form
+ */
+auth.get('/magic/:token', async (c) => {
+  const token = c.req.param('token');
+
+  if (!token) {
+    return c.json({ valid: false, error: 'Token is required' }, 400);
+  }
+
+  const result = await MagicLinkService.validate(token);
+
+  if (!result.success) {
+    return c.json({ 
+      valid: false, 
+      error: result.error,
+      code: result.code,
+    }, 400);
+  }
+
+  return c.json({
+    valid: true,
+    email: result.data!.email,
+  });
+});
+
+/**
+ * POST /auth/magic/:token/set-password
+ * Set password using a magic link token
+ * Used by users who signed up via payment (affiliate or direct)
+ */
+auth.post('/magic/:token/set-password', validate(setPasswordViaMagicLinkSchema), async (c) => {
+  const token = c.req.param('token');
+  const body = c.get('validatedBody') as { password: string };
+
+  if (!token) {
+    return c.json({ error: 'Token is required', code: 'MISSING_TOKEN' }, 400);
+  }
+
+  // Validate token
+  const validateResult = await MagicLinkService.validate(token);
+  if (!validateResult.success) {
+    return c.json({ 
+      error: validateResult.error, 
+      code: validateResult.code 
+    }, 400);
+  }
+
+  const { userId, email } = validateResult.data!;
+
+  // Hash and set password
+  const bcrypt = await import('bcrypt');
+  const passwordHash = await bcrypt.hash(body.password, 10);
+
+  // Update user with password and mark verified
+  await User.findByIdAndUpdate(userId, {
+    passwordHash,
+    emailVerified: true,
+  });
+
+  // Mark magic link as used
+  await MagicLinkService.markUsed(token);
+
+  // Generate tokens for immediate login
+  const tokenResult = await AuthService.generateTokens(userId, email);
+
+  if (!tokenResult.success) {
+    return c.json({ 
+      success: true, 
+      message: 'Password set successfully. Please login.',
+    });
+  }
+
+  console.log(`🔐 Password set via magic link for ${email}`);
+
+  return c.json({
+    success: true,
+    message: 'Password set successfully',
+    accessToken: tokenResult.data!.accessToken,
+    refreshToken: tokenResult.data!.refreshToken,
+    user: {
+      email,
+      emailVerified: true,
+    },
+  });
 });
 
 export { auth as authRoutes };

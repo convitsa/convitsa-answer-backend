@@ -13,6 +13,7 @@ export interface CreateSubscriptionInput {
   lemonSqueezySubscriptionId?: string;
   lemonSqueezyVariantId?: string;
   currentPeriodEnd: Date;
+  bonusTokens?: number; // For affiliate referrals
 }
 
 export interface UpdateSubscriptionInput {
@@ -102,25 +103,33 @@ export class SubscriptionService {
       const plan = getSubscriptionPlan(input.tier);
       const now = new Date();
 
+      // Build update object
+      const updateSet: Record<string, any> = {
+        tier: input.tier,
+        status: 'active',
+        lemonSqueezyCustomerId: input.lemonSqueezyCustomerId,
+        lemonSqueezySubscriptionId: input.lemonSqueezySubscriptionId,
+        lemonSqueezyVariantId: input.lemonSqueezyVariantId,
+        currentPeriodStart: now,
+        currentPeriodEnd: input.currentPeriodEnd,
+        cancelAtPeriodEnd: false,
+        tokensUsedThisMonth: 0,
+        tokensLimit: plan.tokensPerMonth,
+        projectsLimit: plan.projectsLimit,
+        updatedAt: now,
+      };
+      
+      // Add bonus tokens if provided (affiliate referral)
+      if (input.bonusTokens && input.bonusTokens > 0) {
+        updateSet.bonusTokens = input.bonusTokens;
+      }
+
       const subscription = await Subscription.findOneAndUpdate(
         { userId: new Types.ObjectId(userId) },
         {
-          $set: {
-            tier: input.tier,
-            status: 'active',
-            lemonSqueezyCustomerId: input.lemonSqueezyCustomerId,
-            lemonSqueezySubscriptionId: input.lemonSqueezySubscriptionId,
-            lemonSqueezyVariantId: input.lemonSqueezyVariantId,
-            currentPeriodStart: now,
-            currentPeriodEnd: input.currentPeriodEnd,
-            cancelAtPeriodEnd: false,
-            tokensUsedThisMonth: 0,
-            tokensLimit: plan.tokensPerMonth,
-            projectsLimit: plan.projectsLimit,
-            updatedAt: now,
-          },
+          $set: updateSet,
           $setOnInsert: {
-            bonusTokens: 0,
+            bonusTokens: input.bonusTokens || 0,
             migratedFromCredits: 0,
           },
         },

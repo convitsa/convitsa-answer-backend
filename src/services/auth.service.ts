@@ -172,12 +172,15 @@ export class AuthService {
       });
 
       // Generate tokens
-      const tokens = this.generateTokens(user._id.toString(), user.email);
+      const tokensResult = this.generateTokens(user._id.toString(), user.email);
+      if (!tokensResult.success) {
+        return { success: false, error: 'Failed to generate tokens', code: 'TOKEN_ERROR' };
+      }
 
       return {
         success: true,
         data: {
-          ...tokens,
+          ...tokensResult.data!,
           user: {
             id: user._id.toString(),
             email: user.email,
@@ -217,6 +220,15 @@ export class AuthService {
         };
       }
 
+      // Check if user has set a password (users created via payment need to set password first)
+      if (!user.passwordHash) {
+        return {
+          success: false,
+          error: 'Please set your password using the link sent to your email',
+          code: 'PASSWORD_NOT_SET',
+        };
+      }
+
       // Verify password
       const isValidPassword = await bcrypt.compare(password, user.passwordHash);
       if (!isValidPassword) {
@@ -228,12 +240,15 @@ export class AuthService {
       }
 
       // Generate tokens
-      const tokens = this.generateTokens(user._id.toString(), user.email);
+      const tokensResult = this.generateTokens(user._id.toString(), user.email);
+      if (!tokensResult.success) {
+        return { success: false, error: 'Failed to generate tokens', code: 'TOKEN_ERROR' };
+      }
 
       return {
         success: true,
         data: {
-          ...tokens,
+          ...tokensResult.data!,
           user: {
             id: user._id.toString(),
             email: user.email,
@@ -300,21 +315,27 @@ export class AuthService {
 
   /**
    * Generate access and refresh tokens
+   * Made public for magic link password setup flow
    */
-  private static generateTokens(userId: string, email: string): { accessToken: string; refreshToken: string } {
-    const accessToken = jwt.sign(
-      { userId, email },
-      env.JWT_SECRET,
-      { expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'] }
-    );
+  static generateTokens(userId: string, email: string): ServiceResult<{ accessToken: string; refreshToken: string }> {
+    try {
+      const accessToken = jwt.sign(
+        { userId, email },
+        env.JWT_SECRET,
+        { expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'] }
+      );
 
-    const refreshToken = jwt.sign(
-      { userId, email },
-      env.JWT_REFRESH_SECRET,
-      { expiresIn: env.JWT_REFRESH_EXPIRES_IN as jwt.SignOptions['expiresIn'] }
-    );
+      const refreshToken = jwt.sign(
+        { userId, email },
+        env.JWT_REFRESH_SECRET,
+        { expiresIn: env.JWT_REFRESH_EXPIRES_IN as jwt.SignOptions['expiresIn'] }
+      );
 
-    return { accessToken, refreshToken };
+      return { success: true, data: { accessToken, refreshToken } };
+    } catch (error) {
+      console.error('Failed to generate tokens:', error);
+      return { success: false, error: 'Failed to generate tokens', code: 'TOKEN_GENERATION_FAILED' };
+    }
   }
 
   /**

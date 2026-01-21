@@ -198,6 +198,65 @@ export class EmailService {
   }
 
   /**
+   * Send payment welcome email (for users who subscribed via direct/affiliate payment)
+   * Includes magic link to set password
+   */
+  static async sendPaymentWelcomeEmail(
+    to: string,
+    magicUrl: string,
+    planName: string,
+    bonusTokens: number = 0
+  ): Promise<void> {
+    try {
+      const bonusSection = bonusTokens > 0 ? `
+        <div style="margin: 16px 0; padding: 16px; background: ${COLORS.backgroundMuted}; border-radius: 6px;">
+          <p style="font-size: 14px; color: ${COLORS.success}; margin: 0; font-weight: 500;">
+            🎁 Bonus: You received ${bonusTokens.toLocaleString()} extra tokens!
+          </p>
+        </div>
+      ` : '';
+
+      const content = `
+        <p style="font-size: 14px; color: ${COLORS.textMuted}; margin: 0 0 16px; line-height: 1.5;">
+          Thank you for subscribing to <strong>${planName}</strong>! Your payment was successful and your account is ready.
+        </p>
+        ${bonusSection}
+        <p style="font-size: 14px; color: ${COLORS.textMuted}; margin: 0 0 16px; line-height: 1.5;">
+          To get started, please set your password by clicking the button below:
+        </p>
+        <div style="margin: 24px 0; text-align: center;">
+          <a href="${magicUrl}" style="display: inline-block; background: ${COLORS.brandPurple}; color: #FFFFFF; padding: 14px 28px; border-radius: 6px; text-decoration: none; font-weight: 500; font-size: 14px;">
+            Set Your Password
+          </a>
+        </div>
+        <p style="font-size: 14px; color: ${COLORS.textMuted}; margin: 16px 0 0; line-height: 1.5;">
+          After setting your password:
+        </p>
+        <ol style="margin: 8px 0 0; padding-left: 20px; color: ${COLORS.textMuted}; font-size: 14px; line-height: 1.6;">
+          <li>Open the <strong>Convitsa</strong> plugin in Framer</li>
+          <li>Log in with your email and password</li>
+          <li>Complete the quick setup to start using AI chat</li>
+        </ol>
+        <p style="font-size: 13px; color: ${COLORS.textSecondary}; margin: 24px 0 0; line-height: 1.5;">
+          This link expires in 24 hours. If you didn't make this purchase, please contact support.
+        </p>
+      `;
+
+      await resend.emails.send({
+        from: env.RESEND_FROM_EMAIL,
+        to,
+        subject: `Welcome to ${planName} - Set your password`,
+        html: getEmailTemplate({ heading: 'Welcome to Convitsa!', content }),
+        text: `Thank you for subscribing to ${planName}!\n\n${bonusTokens > 0 ? `Bonus: You received ${bonusTokens.toLocaleString()} extra tokens!\n\n` : ''}To get started, set your password: ${magicUrl}\n\nAfter setting your password:\n1. Open the Convitsa plugin in Framer\n2. Log in with your email and password\n3. Complete the quick setup to start using AI chat\n\nThis link expires in 24 hours.`,
+      });
+
+      console.log(`✉️ Payment welcome email sent to ${to}`);
+    } catch (error) {
+      console.error('Failed to send payment welcome email:', error);
+    }
+  }
+
+  /**
    * Send subscription started email
    */
   static async sendSubscriptionStartedEmail(

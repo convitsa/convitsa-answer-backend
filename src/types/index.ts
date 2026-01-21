@@ -6,11 +6,14 @@ import type { Types } from 'mongoose';
 // User Types
 // ============================================================
 
+export type UserCreatedVia = 'registration' | 'payment';
+
 export interface IUser {
   _id: Types.ObjectId;
   email: string;
-  passwordHash: string;
+  passwordHash?: string; // Optional for users created via payment (set later via magic link)
   emailVerified: boolean;
+  createdVia: UserCreatedVia;
   createdAt: Date;
 }
 

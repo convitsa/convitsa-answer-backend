@@ -2,8 +2,7 @@ import { Hono } from 'hono';
 import crypto from 'crypto';
 import { User, CreditBalance, CreditTransaction, Subscription } from '../../db/schemas';
 import { env, getSubscriptionPlan } from '../../config/env';
-import { EmailService } from '../../services/email.service';
-import { SubscriptionService } from '../../services/subscription.service';
+import { EmailService, SubscriptionService, MagicLinkService } from '../../services';
 import type { SubscriptionTier } from '../../types';
 
 const webhooks = new Hono();
@@ -262,28 +261,74 @@ webhooks.post('/lemonsqueezy', async (c) => {
     const eventName = meta.event_name;
     const customData = meta.custom_data || {};
     
+    // Get user identifiers from custom data (passed during checkout from our app)
+    const customUserId = customData.user_id;
+    const customUserEmail = customData.user_email?.toLowerCase().trim();
+    
+    // Get attributes from Lemon Squeezy payload
+    const attributes = data.attributes || {};
+    
+    // Get customer email from Lemon Squeezy (for affiliate purchases without custom_data)
+    const lsCustomerEmail = attributes.user_email?.toLowerCase().trim();
+    
+    // Check if this is an affiliate referral
+    const isAffiliateReferral = !!data.relationships?.affiliate?.data?.id;
+    const affiliateId = data.relationships?.affiliate?.data?.id;
+    
     console.log(`🍋 Lemon Squeezy webhook: ${eventName}`, {
       subscriptionId: data.id,
-      customerId: data.attributes?.customer_id,
-      userEmail: customData.user_email,
+      customerId: attributes.customer_id,
+      userId: customUserId,
+      customUserEmail: customUserEmail,
+      lsCustomerEmail: lsCustomerEmail,
+      isAffiliateReferral,
+      affiliateId,
     });
 
-    // Get user email from custom data (passed during checkout)
-    const userEmail = customData.user_email?.toLowerCase().trim();
-    if (!userEmail) {
-      console.error('❌ Lemon Squeezy webhook: No user email in custom_data');
-      return c.json({ error: 'Missing user email' }, 400);
+    // Find user - prefer user_id over email for reliability
+    let user;
+    let isNewUser = false;
+    
+    if (customUserId) {
+      // Primary: Find by user ID (from our checkout flow)
+      user = await User.findById(customUserId).lean();
     }
-
-    // Find user
-    const user = await User.findOne({ email: userEmail }).lean();
+    
+    // Fallback: Find by email from custom data
+    if (!user && customUserEmail) {
+      user = await User.findOne({ email: customUserEmail }).lean();
+    }
+    
+    // Fallback: Find by email from Lemon Squeezy (affiliate/direct purchases)
+    if (!user && lsCustomerEmail) {
+      user = await User.findOne({ email: lsCustomerEmail }).lean();
+    }
+    
+    // If user still not found, create a new one (for affiliate/direct Lemon Squeezy purchases)
+    const finalEmail = customUserEmail || lsCustomerEmail;
+    if (!user && finalEmail && eventName === 'subscription_created') {
+      console.log(`📝 Creating new user for payment: ${finalEmail}`);
+      
+      const newUser = await User.create({
+        email: finalEmail,
+        emailVerified: true, // They paid, trust the email
+        createdVia: 'payment',
+        // passwordHash is not set - user will set via magic link
+      });
+      
+      user = newUser.toObject();
+      isNewUser = true;
+      
+      console.log(`✅ New user created: ${finalEmail}`);
+    }
+    
     if (!user) {
-      console.error(`❌ Lemon Squeezy webhook: User not found for ${userEmail}`);
+      console.error('❌ Lemon Squeezy webhook: No user found and cannot create one');
       return c.json({ error: 'User not found' }, 404);
     }
 
     const userId = user._id.toString();
-    const attributes = data.attributes || {};
+    const resolvedEmail = user.email; // Use email from database
 
     // Extract subscription details
     const subscriptionId = data.id?.toString();
@@ -302,6 +347,9 @@ webhooks.post('/lemonsqueezy', async (c) => {
         // New subscription created
         const plan = getSubscriptionPlan(tier);
         const periodEnd = renewsAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        
+        // Calculate bonus tokens for affiliate referrals
+        const bonusTokens = isAffiliateReferral ? env.AFFILIATE_BONUS_TOKENS : 0;
 
         await SubscriptionService.createSubscription(userId, {
           tier,
@@ -309,20 +357,43 @@ webhooks.post('/lemonsqueezy', async (c) => {
           lemonSqueezySubscriptionId: subscriptionId,
           lemonSqueezyVariantId: variantId,
           currentPeriodEnd: periodEnd,
+          bonusTokens,
         });
 
-        console.log(`✅ Subscription created for ${userEmail}: ${tier}`);
+        console.log(`✅ Subscription created for ${resolvedEmail}: ${tier}${bonusTokens > 0 ? ` (+${bonusTokens} bonus tokens)` : ''}`);
         
-        // Send subscription started email
-        EmailService.sendSubscriptionStartedEmail(
-          userEmail,
-          plan.name,
-          plan.price,
-          plan.tokensPerMonth,
-          periodEnd
-        ).catch((err) => {
-          console.error('Failed to send subscription started email:', err);
-        });
+        // Handle email sending based on whether user is new or existing
+        if (isNewUser) {
+          // New user from payment - send magic link to set password
+          const magicLinkResult = await MagicLinkService.create(userId);
+          
+          if (magicLinkResult.success) {
+            const magicUrl = `${env.PASSWORD_SETUP_URL}/${magicLinkResult.data!.token}`;
+            
+            // Send payment welcome email with magic link
+            EmailService.sendPaymentWelcomeEmail(
+              resolvedEmail,
+              magicUrl,
+              plan.name,
+              bonusTokens
+            ).catch((err) => {
+              console.error('Failed to send payment welcome email:', err);
+            });
+          } else {
+            console.error('Failed to create magic link:', magicLinkResult.error);
+          }
+        } else {
+          // Existing user - send regular subscription started email
+          EmailService.sendSubscriptionStartedEmail(
+            resolvedEmail,
+            plan.name,
+            plan.price,
+            plan.tokensPerMonth + bonusTokens,
+            periodEnd
+          ).catch((err) => {
+            console.error('Failed to send subscription started email:', err);
+          });
+        }
         break;
       }
 
@@ -338,7 +409,7 @@ webhooks.post('/lemonsqueezy', async (c) => {
           status: status === 'active' ? 'active' : 'paused',
         });
 
-        console.log(`✅ Subscription updated for ${userEmail}: ${tier}`);
+        console.log(`✅ Subscription updated for ${resolvedEmail}: ${tier}`);
         break;
       }
 
@@ -351,12 +422,12 @@ webhooks.post('/lemonsqueezy', async (c) => {
           cancelAtPeriodEnd: true,
         });
 
-        console.log(`⚠️ Subscription cancelled for ${userEmail} (ends at period end)`);
+        console.log(`⚠️ Subscription cancelled for ${resolvedEmail} (ends at period end)`);
         
         // Send cancellation email
         const cancelPlan = getSubscriptionPlan(currentSub?.tier || tier);
         EmailService.sendSubscriptionCancelledEmail(
-          userEmail,
+          resolvedEmail,
           cancelPlan.name,
           accessEnds
         ).catch((err) => {
@@ -372,11 +443,11 @@ webhooks.post('/lemonsqueezy', async (c) => {
           cancelAtPeriodEnd: false,
         });
 
-        console.log(`✅ Subscription resumed for ${userEmail}`);
+        console.log(`✅ Subscription resumed for ${resolvedEmail}`);
         
         // Send reactivation email
         const resumePlan = getSubscriptionPlan(tier);
-        EmailService.sendSubscriptionReactivatedEmail(userEmail, resumePlan.name).catch((err) => {
+        EmailService.sendSubscriptionReactivatedEmail(resolvedEmail, resumePlan.name).catch((err) => {
           console.error('Failed to send subscription reactivated email:', err);
         });
         break;
@@ -404,7 +475,7 @@ webhooks.post('/lemonsqueezy', async (c) => {
           }
         );
 
-        console.log(`⚠️ Subscription expired for ${userEmail}, downgraded to free`);
+        console.log(`⚠️ Subscription expired for ${resolvedEmail}, downgraded to free`);
         break;
       }
 
@@ -413,7 +484,7 @@ webhooks.post('/lemonsqueezy', async (c) => {
           status: 'paused',
         });
 
-        console.log(`⏸️ Subscription paused for ${userEmail}`);
+        console.log(`⏸️ Subscription paused for ${resolvedEmail}`);
         break;
       }
 
@@ -422,7 +493,7 @@ webhooks.post('/lemonsqueezy', async (c) => {
           status: 'active',
         });
 
-        console.log(`▶️ Subscription unpaused for ${userEmail}`);
+        console.log(`▶️ Subscription unpaused for ${resolvedEmail}`);
         break;
       }
 
@@ -443,13 +514,13 @@ webhooks.post('/lemonsqueezy', async (c) => {
           { new: true }
         ).lean();
 
-        console.log(`💳 Payment successful for ${userEmail}, usage reset`);
+        console.log(`💳 Payment successful for ${resolvedEmail}, usage reset`);
         
         // Send renewal email
         if (paymentSub) {
           const renewPlan = getSubscriptionPlan(paymentSub.tier as SubscriptionTier);
           EmailService.sendSubscriptionRenewedEmail(
-            userEmail,
+            resolvedEmail,
             renewPlan.name,
             renewPlan.tokensPerMonth,
             periodEnd
@@ -467,12 +538,12 @@ webhooks.post('/lemonsqueezy', async (c) => {
           status: 'past_due',
         });
 
-        console.log(`❌ Payment failed for ${userEmail}`);
+        console.log(`❌ Payment failed for ${resolvedEmail}`);
 
         // Send payment failed email
         const failedPlan = getSubscriptionPlan(failedSub?.tier as SubscriptionTier || tier);
         const retryDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // Retry in 3 days
-        EmailService.sendPaymentFailedEmail(userEmail, failedPlan.name, retryDate).catch((err) => {
+        EmailService.sendPaymentFailedEmail(resolvedEmail, failedPlan.name, retryDate).catch((err) => {
           console.error('Failed to send payment failed email:', err);
         });
         break;

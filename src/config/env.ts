@@ -92,6 +92,13 @@ const envSchema = z.object({
   // Lemon Squeezy Variant IDs (for checkout)
   LEMONSQUEEZY_PRO_VARIANT_ID: z.string().optional(),
   LEMONSQUEEZY_BUSINESS_VARIANT_ID: z.string().optional(),
+
+  // Affiliate Configuration
+  AFFILIATE_BONUS_TOKENS: z.string().default('5000').transform(Number),
+
+  // Magic Link Configuration
+  MAGIC_LINK_EXPIRY_HOURS: z.string().default('24').transform(Number),
+  PASSWORD_SETUP_URL: z.string().default('https://answer.convitsa.com/password/reset'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
