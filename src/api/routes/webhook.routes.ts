@@ -313,9 +313,15 @@ webhooks.post('/lemonsqueezy', async (c) => {
 
         console.log(`✅ Subscription created for ${userEmail}: ${tier}`);
         
-        // Send welcome email
-        EmailService.sendWelcomeEmail(userEmail).catch((err) => {
-          console.error('Failed to send welcome email:', err);
+        // Send subscription started email
+        EmailService.sendSubscriptionStartedEmail(
+          userEmail,
+          plan.name,
+          plan.price,
+          plan.tokensPerMonth,
+          periodEnd
+        ).catch((err) => {
+          console.error('Failed to send subscription started email:', err);
         });
         break;
       }
@@ -338,11 +344,24 @@ webhooks.post('/lemonsqueezy', async (c) => {
 
       case 'subscription_cancelled': {
         // User cancelled - will end at period end
+        const currentSub = await Subscription.findOne({ userId: user._id }).lean();
+        const accessEnds = endsAt || currentSub?.currentPeriodEnd || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        
         await SubscriptionService.updateSubscription(userId, {
           cancelAtPeriodEnd: true,
         });
 
         console.log(`⚠️ Subscription cancelled for ${userEmail} (ends at period end)`);
+        
+        // Send cancellation email
+        const cancelPlan = getSubscriptionPlan(currentSub?.tier || tier);
+        EmailService.sendSubscriptionCancelledEmail(
+          userEmail,
+          cancelPlan.name,
+          accessEnds
+        ).catch((err) => {
+          console.error('Failed to send subscription cancelled email:', err);
+        });
         break;
       }
 
@@ -354,6 +373,12 @@ webhooks.post('/lemonsqueezy', async (c) => {
         });
 
         console.log(`✅ Subscription resumed for ${userEmail}`);
+        
+        // Send reactivation email
+        const resumePlan = getSubscriptionPlan(tier);
+        EmailService.sendSubscriptionReactivatedEmail(userEmail, resumePlan.name).catch((err) => {
+          console.error('Failed to send subscription reactivated email:', err);
+        });
         break;
       }
 
@@ -412,23 +437,44 @@ webhooks.post('/lemonsqueezy', async (c) => {
         });
 
         // Reset monthly tokens
-        await Subscription.findOneAndUpdate(
+        const paymentSub = await Subscription.findOneAndUpdate(
           { userId: user._id },
-          { $set: { tokensUsedThisMonth: 0 } }
-        );
+          { $set: { tokensUsedThisMonth: 0 } },
+          { new: true }
+        ).lean();
 
         console.log(`💳 Payment successful for ${userEmail}, usage reset`);
+        
+        // Send renewal email
+        if (paymentSub) {
+          const renewPlan = getSubscriptionPlan(paymentSub.tier as SubscriptionTier);
+          EmailService.sendSubscriptionRenewedEmail(
+            userEmail,
+            renewPlan.name,
+            renewPlan.tokensPerMonth,
+            periodEnd
+          ).catch((err) => {
+            console.error('Failed to send subscription renewed email:', err);
+          });
+        }
         break;
       }
 
       case 'subscription_payment_failed': {
+        const failedSub = await Subscription.findOne({ userId: user._id }).lean();
+        
         await SubscriptionService.updateSubscription(userId, {
           status: 'past_due',
         });
 
         console.log(`❌ Payment failed for ${userEmail}`);
 
-        // TODO: Send payment failed email
+        // Send payment failed email
+        const failedPlan = getSubscriptionPlan(failedSub?.tier as SubscriptionTier || tier);
+        const retryDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // Retry in 3 days
+        EmailService.sendPaymentFailedEmail(userEmail, failedPlan.name, retryDate).catch((err) => {
+          console.error('Failed to send payment failed email:', err);
+        });
         break;
       }
 
