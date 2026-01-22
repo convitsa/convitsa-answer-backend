@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'http';
 import type { Server } from 'http';
 import { Types } from 'mongoose';
 import { ApiKeyService } from '../services/project.service';
+import { SubscriptionService } from '../services/subscription.service';
 import { ChatSession, Project } from '../db/schemas';
 import {
   checkRateLimit,
@@ -48,7 +49,7 @@ export function createWebSocketServer(server: Server): WebSocketServer {
 
     // Parse query parameters
     const url = req.url || '';
-    const { token, tier: tierParam } = parseWSQuery(url);
+    const { token } = parseWSQuery(url);
 
     // Validate required parameters
     if (!token) {
@@ -56,9 +57,6 @@ export function createWebSocketServer(server: Server): WebSocketServer {
       ws.close(4001, 'Missing API key');
       return;
     }
-
-    // Validate tier
-    const tier: ChatTier = tierParam === 'pro' ? 'pro' : 'free';
 
     // Validate API key
     const keyResult = await ApiKeyService.validateApiKey(token);
@@ -69,6 +67,10 @@ export function createWebSocketServer(server: Server): WebSocketServer {
     }
 
     const { apiKeyId, projectId, userId } = keyResult.data!;
+
+    // Get tier from user's actual subscription (not from frontend parameter)
+    const subscription = await SubscriptionService.getSubscription(userId.toString());
+    const tier: ChatTier = subscription.tier as ChatTier;
 
     // Check connection limit
     const connectionCount = await getConnectionCount(apiKeyId.toString());

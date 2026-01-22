@@ -235,6 +235,44 @@ export class LeadService {
   }
 
   /**
+   * Update lead details (all fields)
+   */
+  static async updateLead(
+    leadId: Types.ObjectId,
+    updates: {
+      email?: string;
+      phone?: string;
+      name?: string;
+      company?: string;
+      status?: LeadStatus;
+      notes?: string;
+    }
+  ): Promise<ILead | null> {
+    // Build update object with only defined fields
+    const update: Record<string, any> = {};
+    
+    if (updates.email !== undefined) update.email = updates.email.toLowerCase().trim();
+    if (updates.phone !== undefined) update.phone = updates.phone.trim();
+    if (updates.name !== undefined) update.name = updates.name.trim();
+    if (updates.company !== undefined) update.company = updates.company.trim();
+    if (updates.status !== undefined) update.status = updates.status;
+    if (updates.notes !== undefined) update.notes = updates.notes;
+
+    // Only update if there are fields to update
+    if (Object.keys(update).length === 0) {
+      return Lead.findById(leadId).lean() as Promise<ILead | null>;
+    }
+
+    const lead = await Lead.findByIdAndUpdate(
+      leadId,
+      { $set: update },
+      { new: true }
+    ).lean();
+
+    return lead as ILead | null;
+  }
+
+  /**
    * Delete a lead
    */
   static async deleteLead(leadId: Types.ObjectId): Promise<boolean> {

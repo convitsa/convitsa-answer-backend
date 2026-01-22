@@ -209,7 +209,7 @@ leads.get('/:projectId/leads/:leadId', async (c) => {
 
 /**
  * PATCH /projects/:projectId/leads/:leadId
- * Update a lead's status and notes
+ * Update a lead's details (email, phone, name, company, status, notes)
  */
 leads.patch('/:projectId/leads/:leadId', async (c) => {
   const user = c.get('user');
@@ -233,16 +233,21 @@ leads.patch('/:projectId/leads/:leadId', async (c) => {
   }
 
   const body = await c.req.json();
-  const { status, notes } = body;
+  const { email, phone, name, company, status, notes } = body;
 
+  // Validate status if provided
   if (status && !['new', 'contacted', 'qualified', 'converted'].includes(status)) {
     return c.json({ error: 'Invalid status', code: 'VALIDATION_ERROR' }, 400);
   }
 
-  const lead = await LeadService.updateLeadStatus(
+  // Validate email format if provided
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return c.json({ error: 'Invalid email format', code: 'VALIDATION_ERROR' }, 400);
+  }
+
+  const lead = await LeadService.updateLead(
     new Types.ObjectId(leadId),
-    status || existingLead.status,
-    notes
+    { email, phone, name, company, status, notes }
   );
 
   if (!lead) {
@@ -260,6 +265,7 @@ leads.patch('/:projectId/leads/:leadId', async (c) => {
       status: lead.status,
       notes: lead.notes,
       capturedAt: lead.capturedAt,
+      metadata: lead.metadata,
     },
   });
 });
