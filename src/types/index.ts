@@ -241,7 +241,13 @@ export interface WSErrorResponse {
   code?: string;
 }
 
-export type WSServerMessage = WSChunkResponse | WSDoneResponse | WSErrorResponse;
+export interface WSReadyResponse {
+  type: 'ready';
+  sessionId: string;
+  tier: ChatTier;
+}
+
+export type WSServerMessage = WSChunkResponse | WSDoneResponse | WSErrorResponse | WSReadyResponse;
 
 export interface AuthenticatedWebSocket extends WebSocket {
   apiKeyId: Types.ObjectId;

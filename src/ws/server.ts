@@ -14,7 +14,7 @@ import {
 import { env, getTierConfig } from '../config/env';
 import { parseWSQuery } from '../utils/helpers';
 import { handleChatMessage } from './handlers/chat.handler';
-import type { AuthenticatedWebSocket, ChatTier, WSClientMessage, WSErrorResponse } from '../types';
+import type { AuthenticatedWebSocket, ChatTier, WSClientMessage, WSErrorResponse, WSReadyResponse } from '../types';
 
 const HEARTBEAT_INTERVAL = 30000; // 30 seconds
 
@@ -58,7 +58,7 @@ export function createWebSocketServer(server: Server): WebSocketServer {
       return;
     }
 
-    // Validate API key
+    // Validate API key first (required for all other operations)
     const keyResult = await ApiKeyService.validateApiKey(token);
     if (!keyResult.success) {
       sendError(ws, 'Invalid or inactive API key', 'INVALID_API_KEY');
@@ -67,40 +67,43 @@ export function createWebSocketServer(server: Server): WebSocketServer {
     }
 
     const { apiKeyId, projectId, userId } = keyResult.data!;
+    const apiKeyIdStr = apiKeyId.toString();
 
-    // Get tier from user's actual subscription (not from frontend parameter)
-    const subscription = await SubscriptionService.getSubscription(userId.toString());
+    // Run parallel operations to speed up initialization
+    const [subscription, connectionCount, project] = await Promise.all([
+      SubscriptionService.getSubscription(userId.toString()),
+      getConnectionCount(apiKeyIdStr),
+      Project.findById(projectId).lean(),
+    ]);
+
     const tier: ChatTier = subscription.tier as ChatTier;
 
     // Check connection limit
-    const connectionCount = await getConnectionCount(apiKeyId.toString());
     if (connectionCount >= env.MAX_WS_CONNECTIONS_PER_KEY) {
       sendError(ws, 'Maximum connections reached for this API key', 'CONNECTION_LIMIT');
       ws.close(4003, 'Connection limit reached');
       return;
     }
 
-    // Increment connection count
-    await incrementConnections(apiKeyId.toString());
-
-    // Get project info for RAG context
-    const project = await Project.findById(projectId).lean();
+    // Validate project exists
     if (!project) {
       sendError(ws, 'Project not found', 'PROJECT_NOT_FOUND');
       ws.close(4004, 'Project not found');
-      await decrementConnections(apiKeyId.toString());
       return;
     }
 
-    // Create chat session
-    const session = await ChatSession.create({
-      projectId,
-      apiKeyId,
-      tier,
-      startedAt: new Date(),
-      totalTokens: 0,
-      messageCount: 0,
-    });
+    // Increment connection count and create session in parallel
+    const [, session] = await Promise.all([
+      incrementConnections(apiKeyIdStr),
+      ChatSession.create({
+        projectId,
+        apiKeyId,
+        tier,
+        startedAt: new Date(),
+        totalTokens: 0,
+        messageCount: 0,
+      }),
+    ]);
 
     // Attach session info to WebSocket
     authWs.apiKeyId = apiKeyId;
@@ -109,6 +112,9 @@ export function createWebSocketServer(server: Server): WebSocketServer {
     authWs.sessionId = session._id as Types.ObjectId;
 
     console.log(`🔗 New WS connection: project=${projectId}, tier=${tier}, session=${session._id}`);
+
+    // Send ready message to client so they know connection is initialized
+    sendReady(ws, session._id.toString(), tier);
 
     // Handle pong for heartbeat
     ws.on('pong', () => {
@@ -187,6 +193,21 @@ export function createWebSocketServer(server: Server): WebSocketServer {
   });
 
   return wss;
+}
+
+/**
+ * Send ready message to client when connection is initialized
+ */
+function sendReady(ws: WebSocket, sessionId: string, tier: ChatTier): void {
+  const response: WSReadyResponse = {
+    type: 'ready',
+    sessionId,
+    tier,
+  };
+  
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(response));
+  }
 }
 
 /**
