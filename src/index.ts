@@ -9,8 +9,11 @@ import { securityHeaders, errorHandler, requestSizeLimit } from './api/middlewar
 import { ApiKeyService } from './services/project.service';
 import { BlobService } from './services/blob.service';
 import { DocumentWorker } from './workers/document.worker';
-import { ChatSession, Project } from './db/schemas';
+import { ChatSession, Project, ChatMessage, Lead } from './db/schemas';
 import { SubscriptionService } from './services/subscription.service';
+import { LostLeadService } from './services/lost-lead.service';
+import { RAGService } from './services/rag.service';
+import type { IChatMessage } from './types';
 import { checkRateLimit, incrementConnections, decrementConnections, getConnectionCount } from './db/redis';
 import { getTierConfig } from './config/env';
 import { handleChatMessage } from './ws/handlers/chat.handler';
@@ -83,7 +86,7 @@ async function startServer() {
     });
 
     // Start Bun server with WebSocket support
-    const server = Bun.serve<{ token: string; tier: string; [key: string]: any }>({
+    const server = Bun.serve<{ token: string; visitorId: string; [key: string]: any }>({
       port: env.PORT,
       
       fetch(req, server) {
@@ -92,14 +95,17 @@ async function startServer() {
         // Handle WebSocket upgrade for /chat path
         if (url.pathname === '/chat') {
           const token = url.searchParams.get('token');
-          const tier = url.searchParams.get('tier') || 'free';
+          const visitorId = url.searchParams.get('visitorId') || crypto.randomUUID();
+          const pageUrl = url.searchParams.get('pageUrl') || '';
+          const referrer = url.searchParams.get('referrer') || '';
+          const userAgent = req.headers.get('user-agent') || '';
           
           if (!token) {
             return new Response('API key required', { status: 401 });
           }
           
           const upgraded = server.upgrade(req, {
-            data: { token, tier },
+            data: { token, visitorId, pageUrl, referrer, userAgent },
           });
           
           if (upgraded) {
@@ -114,7 +120,7 @@ async function startServer() {
       
       websocket: {
         async open(ws) {
-          const { token } = ws.data;
+          const { token, visitorId, pageUrl, referrer, userAgent } = ws.data;
           
           // Validate API key
           const keyResult = await ApiKeyService.validateApiKey(token);
@@ -125,60 +131,85 @@ async function startServer() {
           }
           
           const { apiKeyId, projectId, userId } = keyResult.data!;
+          const apiKeyIdStr = apiKeyId.toString();
           
-          // Get subscription tier from database (NOT from query params!)
-          let tier: ChatTier = 'free';
+          // Get subscription - must exist (don't default to free!)
+          let subscription;
           try {
-            const subscription = await SubscriptionService.getSubscription(userId.toString());
-            if (subscription) {
-              tier = subscription.tier as ChatTier;
-              console.log(`🎫 User ${userId} subscription: tier=${tier}, status=${subscription.status}`);
-            } else {
-              console.log(`⚠️ No subscription found for user ${userId}, using free tier`);
+            subscription = await SubscriptionService.getSubscription(userId.toString());
+            if (!subscription) {
+              console.log(`⚠️ No subscription found for user ${userId}`);
+              ws.send(JSON.stringify({ type: 'error', message: 'No active subscription found', code: 'NO_SUBSCRIPTION' }));
+              ws.close(4005, 'No subscription');
+              return;
             }
           } catch (error) {
-            console.error(`❌ Error getting subscription for user ${userId}:`, error);
-            // Continue with free tier on error
+            console.error(`❌ Subscription lookup failed for userId=${userId}:`, error);
+            ws.send(JSON.stringify({ type: 'error', message: 'Subscription lookup failed', code: 'SUBSCRIPTION_ERROR' }));
+            ws.close(4005, 'Subscription error');
+            return;
           }
           
+          const tier: ChatTier = subscription.tier as ChatTier;
+          console.log(`🎫 User ${userId} subscription: tier=${tier}, status=${subscription.status}, dodoSubId=${subscription.dodoSubscriptionId || 'none'}`);
+          
+          // Run parallel operations for better performance
+          const [connectionCount, project] = await Promise.all([
+            getConnectionCount(apiKeyIdStr),
+            Project.findById(projectId).lean(),
+          ]);
+          
           // Check connection limit
-          const connectionCount = await getConnectionCount(apiKeyId.toString());
           if (connectionCount >= env.MAX_WS_CONNECTIONS_PER_KEY) {
             ws.send(JSON.stringify({ type: 'error', message: 'Connection limit reached', code: 'CONNECTION_LIMIT' }));
             ws.close(4003, 'Connection limit reached');
             return;
           }
           
-          await incrementConnections(apiKeyId.toString());
-          
-          // Get project
-          const project = await Project.findById(projectId).lean();
+          // Validate project exists
           if (!project) {
             ws.send(JSON.stringify({ type: 'error', message: 'Project not found', code: 'PROJECT_NOT_FOUND' }));
             ws.close(4004, 'Project not found');
-            await decrementConnections(apiKeyId.toString());
             return;
           }
           
-          // Create session with tier from subscription
-          const session = await ChatSession.create({
-            projectId,
-            apiKeyId,
-            tier,
-            startedAt: new Date(),
-            totalTokens: 0,
-            messageCount: 0,
-          });
+          // Increment connection count and create session in parallel
+          const [, session] = await Promise.all([
+            incrementConnections(apiKeyIdStr),
+            ChatSession.create({
+              projectId,
+              apiKeyId,
+              tier,
+              visitorId,
+              startedAt: new Date(),
+              totalTokens: 0,
+              messageCount: 0,
+              leadCaptured: false,
+              metadata: {
+                userAgent,
+                referrer,
+                pageUrl,
+              },
+            }),
+          ]);
           
           // Store connection data
-          ws.data.apiKeyId = apiKeyId.toString();
+          ws.data.apiKeyId = apiKeyIdStr;
           ws.data.projectId = projectId.toString();
           ws.data.userId = userId.toString();
           ws.data.sessionId = session._id.toString();
           ws.data.websiteUrl = project.websiteUrl;
           ws.data.tier = tier; // Store actual tier from subscription
           
-          console.log(`🔗 WS connected: project=${projectId}, tier=${tier}, user=${userId}`);
+          console.log(`🔗 WS connected: project=${projectId}, tier=${tier}, user=${userId}, visitor=${visitorId}`);
+          
+          // Send ready message to client
+          ws.send(JSON.stringify({
+            type: 'ready',
+            sessionId: session._id.toString(),
+            tier,
+            visitorId,
+          }));
         },
         
         async message(ws, message) {
@@ -251,16 +282,76 @@ async function startServer() {
         },
         
         async close(ws) {
-          if (ws.data.apiKeyId) {
-            await decrementConnections(ws.data.apiKeyId);
+          const { apiKeyId, sessionId, tier, visitorId } = ws.data;
+          
+          if (apiKeyId) {
+            await decrementConnections(apiKeyId);
           }
-          if (ws.data.sessionId) {
+          if (sessionId) {
             await ChatSession.updateOne(
-              { _id: ws.data.sessionId },
+              { _id: sessionId },
               { $set: { endedAt: new Date() } }
             );
           }
-          console.log(`🔌 WS disconnected: session=${ws.data.sessionId}`);
+          console.log(`🔌 WS disconnected: session=${sessionId}`);
+          
+          // Process lost lead if no lead was captured (Pro/Business tiers only)
+          console.log(`🔍 Lost lead check: tier=${tier}, visitorId=${visitorId ? 'yes' : 'no'}`);
+          
+          if (tier === 'free') {
+            console.log(`⏭️ Skipping lost lead: Free tier (upgrade to Pro/Business)`);
+            return;
+          }
+          
+          if (!visitorId) {
+            console.log(`⏭️ Skipping lost lead: No visitorId`);
+            return;
+          }
+          
+          if (!sessionId) {
+            console.log(`⏭️ Skipping lost lead: No sessionId`);
+            return;
+          }
+          
+          try {
+            // Check if a lead was captured for this session
+            const leadExists = await Lead.findOne({ sessionId });
+            
+            if (leadExists) {
+              // Mark session as having captured a lead
+              await ChatSession.updateOne(
+                { _id: sessionId },
+                { $set: { leadCaptured: true } }
+              );
+              console.log(`✅ Lead captured for session=${sessionId}, skipping lost lead`);
+              return;
+            }
+            
+            // Get messages for intent scoring
+            const messages = await ChatMessage.find({ sessionId })
+              .sort({ createdAt: 1 })
+              .lean() as IChatMessage[];
+            
+            // Only process if there were actual messages (at least 1 user + 1 assistant)
+            if (messages.length < 2) {
+              console.log(`⏭️ Skipping lost lead: Only ${messages.length} messages (need at least 2)`);
+              return;
+            }
+            
+            console.log(`🔍 Processing lost lead: visitor=${visitorId}, messages=${messages.length}`);
+            
+            // Score intent using AI
+            const intentResult = await RAGService.scoreSessionIntent(messages);
+            
+            console.log(`📊 Intent score: ${intentResult.score} (${intentResult.signals.join(', ')})`);
+            
+            // Update lost lead record
+            await LostLeadService.updateFromSession(sessionId, intentResult);
+            
+            console.log(`✅ Lost lead recorded for visitor=${visitorId}`);
+          } catch (error) {
+            console.error('❌ Lost lead processing error:', error);
+          }
         },
       },
     });
