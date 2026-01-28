@@ -54,9 +54,12 @@ export class SubscriptionService {
     }).lean() as ISubscription | null;
 
     if (!subscription) {
-      // Create free tier subscription for new users
-      subscription = await this.createFreeSubscription(userId);
+      // Log error but DO NOT auto-create free subscription
+      console.error(`❌ No subscription found for userId=${userId}. User must have a subscription record.`);
+      throw new Error(`No subscription found for user ${userId}`);
     }
+    
+    console.log(`📋 Found subscription for userId=${userId}: tier=${subscription.tier}, status=${subscription.status}`);
 
     // Check if period needs reset
     if (new Date() >= subscription.currentPeriodEnd) {

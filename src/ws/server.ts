@@ -75,14 +75,26 @@ export function createWebSocketServer(server: Server): WebSocketServer {
     const { apiKeyId, projectId, userId } = keyResult.data!;
     const apiKeyIdStr = apiKeyId.toString();
 
+    // Get subscription - must exist
+    let subscription;
+    try {
+      subscription = await SubscriptionService.getSubscription(userId.toString());
+    } catch (error) {
+      console.error(`❌ Subscription lookup failed for userId=${userId}:`, error);
+      sendError(ws, 'No active subscription found for this account', 'NO_SUBSCRIPTION');
+      ws.close(4005, 'No subscription');
+      return;
+    }
+
     // Run parallel operations to speed up initialization
-    const [subscription, connectionCount, project] = await Promise.all([
-      SubscriptionService.getSubscription(userId.toString()),
+    const [connectionCount, project] = await Promise.all([
       getConnectionCount(apiKeyIdStr),
       Project.findById(projectId).lean(),
     ]);
 
     const tier: ChatTier = subscription.tier as ChatTier;
+
+    console.log(`🎫 User ${userId} subscription: tier=${tier}, status=${subscription.status}, dodoSubId=${subscription.dodoSubscriptionId || 'none'}`);
 
     // Check connection limit
     if (connectionCount >= env.MAX_WS_CONNECTIONS_PER_KEY) {
@@ -200,6 +212,14 @@ export function createWebSocketServer(server: Server): WebSocketServer {
       );
 
       // Process lost lead if no lead was captured (Pro/Business tiers only)
+      console.log(`🔍 Lost lead check: tier=${tier}, visitorId=${authWs.visitorId ? 'yes' : 'no'}`);
+      
+      if (tier === 'free') {
+        console.log(`⏭️ Skipping lost lead processing: Free tier (upgrade to Pro/Business for Lost Lead Intelligence)`);
+      } else if (!authWs.visitorId) {
+        console.log(`⏭️ Skipping lost lead processing: No visitorId`);
+      }
+      
       if (tier !== 'free' && authWs.visitorId) {
         try {
           // Check if a lead was captured for this session
@@ -222,6 +242,8 @@ export function createWebSocketServer(server: Server): WebSocketServer {
               
               // Update lost lead record
               await LostLeadService.updateFromSession(authWs.sessionId, intentResult);
+            } else {
+              console.log(`⏭️ Skipping lost lead processing: Only ${messages.length} messages (need at least 2)`);
             }
           } else {
             // Mark session as having captured a lead
