@@ -73,10 +73,11 @@ const envSchema = z.object({
   GUMROAD_SELLER_ID: z.string().optional(),
   GUMROAD_WEBHOOK_TOKEN: z.string().optional(),
 
-  // Lemon Squeezy (for subscription payments)
-  LEMONSQUEEZY_API_KEY: z.string().min(1, 'LEMONSQUEEZY_API_KEY is required'),
-  LEMONSQUEEZY_STORE_ID: z.string().min(1, 'LEMONSQUEEZY_STORE_ID is required'),
-  LEMONSQUEEZY_WEBHOOK_SECRET: z.string().min(16, 'LEMONSQUEEZY_WEBHOOK_SECRET must be at least 16 characters'),
+  // Dodo Payments (for subscription payments)
+  DODO_PAYMENTS_API_KEY: z.string().min(1, 'DODO_PAYMENTS_API_KEY is required'),
+  DODO_PAYMENTS_WEBHOOK_KEY: z.string().min(16, 'DODO_PAYMENTS_WEBHOOK_KEY must be at least 16 characters'),
+  DODO_PAYMENTS_ENVIRONMENT: z.enum(['test_mode', 'live_mode']).default('test_mode'),
+  DODO_PAYMENTS_RETURN_URL: z.string().url().optional(), // Optional - if not set, user stays on Dodo page after payment
 
   // Subscription Plan Configuration (Convitsa tokens per month)
   // Optimized for 60% profit margin with rate 30
@@ -89,9 +90,9 @@ const envSchema = z.object({
   PRO_PROJECTS_LIMIT: z.string().default('5').transform(Number),
   BUSINESS_PROJECTS_LIMIT: z.string().default('999').transform(Number), // Effectively unlimited
 
-  // Lemon Squeezy Variant IDs (for checkout)
-  LEMONSQUEEZY_PRO_VARIANT_ID: z.string().optional(),
-  LEMONSQUEEZY_BUSINESS_VARIANT_ID: z.string().optional(),
+  // Dodo Payments Product IDs (for checkout)
+  DODO_PRO_PRODUCT_ID: z.string().optional(),
+  DODO_BUSINESS_PRODUCT_ID: z.string().optional(),
 
   // Affiliate Configuration
   AFFILIATE_BONUS_TOKENS: z.string().default('5000').transform(Number),

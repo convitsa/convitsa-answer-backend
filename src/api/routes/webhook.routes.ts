@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import crypto from 'crypto';
 import bcrypt from 'bcrypt';
+import { Webhook } from 'standardwebhooks';
 import { User, CreditBalance, CreditTransaction, Subscription } from '../../db/schemas';
 import { env, getSubscriptionPlan } from '../../config/env';
 import { EmailService, SubscriptionService } from '../../services';
@@ -237,186 +237,198 @@ webhooks.get('/gumroad/test', (c) => {
 });
 
 // ============================================================
-// LEMON SQUEEZY WEBHOOKS
+// DODO PAYMENTS WEBHOOKS
 // ============================================================
 
 /**
- * Lemon Squeezy variant ID to tier mapping
+ * Dodo Payments product ID to tier mapping
  */
-function getTierFromVariantId(variantId: string): SubscriptionTier {
-  if (variantId === env.LEMONSQUEEZY_PRO_VARIANT_ID) return 'pro';
-  if (variantId === env.LEMONSQUEEZY_BUSINESS_VARIANT_ID) return 'business';
+function getTierFromProductId(productId: string): SubscriptionTier {
+  if (productId === env.DODO_PRO_PRODUCT_ID) return 'pro';
+  if (productId === env.DODO_BUSINESS_PRODUCT_ID) return 'business';
   return 'free';
 }
 
+// Initialize Standard Webhooks verifier
+const webhookVerifier = new Webhook(env.DODO_PAYMENTS_WEBHOOK_KEY);
+
 /**
- * Verify Lemon Squeezy webhook signature
+ * Dodo Payments subscription webhook payload type
  */
-function verifyLemonSqueezySignature(payload: string, signature: string): boolean {
-  const hmac = crypto.createHmac('sha256', env.LEMONSQUEEZY_WEBHOOK_SECRET);
-  const digest = hmac.update(payload).digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
+interface DodoSubscriptionPayload {
+  subscription_id: string;
+  product_id: string;
+  status: 'pending' | 'active' | 'on_hold' | 'cancelled' | 'failed' | 'expired';
+  customer: {
+    customer_id: string;
+    email: string;
+    name: string;
+    metadata?: Record<string, any>;
+  };
+  metadata?: Record<string, any>;
+  next_billing_date: string;
+  previous_billing_date?: string;
+  cancel_at_next_billing_date: boolean;
+  quantity: number;
+  recurring_pre_tax_amount: number;
+  currency: string;
+  created_at: string;
+  cancelled_at?: string;
+  expires_at?: string;
+}
+
+interface DodoWebhookPayload {
+  type: string;
+  data: DodoSubscriptionPayload;
 }
 
 /**
- * POST /webhooks/lemonsqueezy
- * Handle Lemon Squeezy subscription webhooks
+ * POST /webhooks/dodo
+ * Handle Dodo Payments subscription webhooks
  * 
  * Events:
- * - subscription_created: New subscription
- * - subscription_updated: Plan change, renewal
- * - subscription_cancelled: Cancellation requested
- * - subscription_resumed: Reactivated after cancellation
- * - subscription_expired: Subscription ended
- * - subscription_paused: Subscription paused
- * - subscription_unpaused: Subscription unpaused
- * - subscription_payment_success: Successful payment
- * - subscription_payment_failed: Failed payment
+ * - subscription.active: New subscription activated or reactivated
+ * - subscription.updated: Subscription updated (any field change)
+ * - subscription.on_hold: Payment failed, subscription on hold
+ * - subscription.renewed: Subscription renewed for next period
+ * - subscription.plan_changed: Plan upgraded/downgraded
+ * - subscription.cancelled: Subscription cancelled
+ * - subscription.failed: Subscription creation failed
+ * - subscription.expired: Subscription expired
  */
-webhooks.post('/lemonsqueezy', async (c) => {
+webhooks.post('/dodo', async (c) => {
   try {
     // Get raw body for signature verification
     const rawBody = await c.req.text();
-    const signature = c.req.header('x-signature') || '';
+    
+    // Get Standard Webhooks headers
+    const webhookHeaders = {
+      'webhook-id': c.req.header('webhook-id') || '',
+      'webhook-signature': c.req.header('webhook-signature') || '',
+      'webhook-timestamp': c.req.header('webhook-timestamp') || '',
+    };
 
-    // Verify webhook signature
-    if (!verifyLemonSqueezySignature(rawBody, signature)) {
-      console.error('❌ Lemon Squeezy webhook: Invalid signature');
+    // Verify webhook signature using Standard Webhooks
+    try {
+      webhookVerifier.verify(rawBody, webhookHeaders);
+    } catch (verifyError) {
+      console.error('❌ Dodo Payments webhook: Invalid signature', verifyError);
       return c.json({ error: 'Invalid signature' }, 401);
     }
 
     // Parse webhook payload
-    const payload = JSON.parse(rawBody);
-    const { meta, data } = payload;
+    const payload: DodoWebhookPayload = JSON.parse(rawBody);
+    const { type: eventType, data: subscription } = payload;
 
-    const eventName = meta.event_name;
-    const customData = meta.custom_data || {};
+    // Get customer info
+    const customer = subscription.customer;
+    const customerId = customer.customer_id;
+    const customerEmail = customer.email?.toLowerCase().trim();
     
-    // Get user identifiers from custom data (passed during checkout from our app)
-    const customUserId = customData.user_id;
-    const customUserEmail = customData.user_email?.toLowerCase().trim();
-    
-    // Get attributes from Lemon Squeezy payload
-    const attributes = data.attributes || {};
-    
-    // Get customer email from Lemon Squeezy (for affiliate purchases without custom_data)
-    const lsCustomerEmail = attributes.user_email?.toLowerCase().trim();
-    
-    // Check if this is an affiliate referral
-    const isAffiliateReferral = !!data.relationships?.affiliate?.data?.id;
-    const affiliateId = data.relationships?.affiliate?.data?.id;
-    
-    console.log(`🍋 Lemon Squeezy webhook: ${eventName}`, {
-      subscriptionId: data.id,
-      customerId: attributes.customer_id,
-      userId: customUserId,
-      customUserEmail: customUserEmail,
-      lsCustomerEmail: lsCustomerEmail,
-      isAffiliateReferral,
-      affiliateId,
+    // Get custom metadata (user_id passed during checkout)
+    const metadata = subscription.metadata || {};
+    const customUserId = metadata.user_id;
+
+    console.log(`🔷 Dodo Payments webhook: ${eventType}`, {
+      subscriptionId: subscription.subscription_id,
+      customerId,
+      customerEmail,
+      customUserId,
+      productId: subscription.product_id,
+      status: subscription.status,
     });
 
-    // Find user - prefer user_id over email for reliability
+    // Find user - prefer user_id from metadata over email
     let user;
     let isNewUser = false;
     
     if (customUserId) {
-      // Primary: Find by user ID (from our checkout flow)
       user = await User.findById(customUserId).lean();
     }
     
-    // Fallback: Find by email from custom data
-    if (!user && customUserEmail) {
-      user = await User.findOne({ email: customUserEmail }).lean();
+    if (!user && customerEmail) {
+      user = await User.findOne({ email: customerEmail }).lean();
     }
     
-    // Fallback: Find by email from Lemon Squeezy (affiliate/direct purchases)
-    if (!user && lsCustomerEmail) {
-      user = await User.findOne({ email: lsCustomerEmail }).lean();
-    }
-    
-    // If user still not found, create a new one (for affiliate/direct Lemon Squeezy purchases)
-    const finalEmail = customUserEmail || lsCustomerEmail;
+    // Create new user for affiliate/direct purchases on subscription.active
     let generatedPassword: string | null = null;
     
-    if (!user && finalEmail && eventName === 'subscription_created') {
-      console.log(`📝 Creating new user for payment: ${finalEmail}`);
+    if (!user && customerEmail && eventType === 'subscription.active') {
+      console.log(`📝 Creating new user for payment: ${customerEmail}`);
       
-      // Generate a simple random password
       generatedPassword = generateSimplePassword();
       const passwordHash = await bcrypt.hash(generatedPassword, 10);
       
       const newUser = await User.create({
-        email: finalEmail,
+        email: customerEmail,
         passwordHash,
-        emailVerified: true, // They paid, trust the email
+        emailVerified: true,
         createdVia: 'payment',
       });
       
       user = newUser.toObject();
       isNewUser = true;
       
-      console.log(`✅ New user created: ${finalEmail} (password generated)`);
+      console.log(`✅ New user created: ${customerEmail} (password generated)`);
     }
     
     if (!user) {
-      console.error('❌ Lemon Squeezy webhook: No user found and cannot create one');
+      console.error('❌ Dodo Payments webhook: No user found and cannot create one');
       return c.json({ error: 'User not found' }, 404);
     }
 
     const userId = user._id.toString();
-    const resolvedEmail = user.email; // Use email from database
+    const resolvedEmail = user.email;
 
     // Extract subscription details
-    const subscriptionId = data.id?.toString();
-    const customerId = attributes.customer_id?.toString();
-    const variantId = attributes.variant_id?.toString();
-    const status = attributes.status;
-    const renewsAt = attributes.renews_at ? new Date(attributes.renews_at) : null;
-    const endsAt = attributes.ends_at ? new Date(attributes.ends_at) : null;
-    const cancelledAt = attributes.cancelled ? new Date() : null;
+    const subscriptionId = subscription.subscription_id;
+    const productId = subscription.product_id;
+    const nextBillingDate = subscription.next_billing_date ? new Date(subscription.next_billing_date) : null;
+    const expiresAt = subscription.expires_at ? new Date(subscription.expires_at) : null;
 
-    // Determine tier from variant
-    const tier = getTierFromVariantId(variantId || '');
+    // Determine tier from product ID
+    const tier = getTierFromProductId(productId);
 
-    switch (eventName) {
-      case 'subscription_created': {
-        // New subscription created
+    switch (eventType) {
+      case 'subscription.active': {
+        // New subscription activated or reactivated
         const plan = getSubscriptionPlan(tier);
-        const periodEnd = renewsAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        const periodEnd = nextBillingDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
         
-        // Calculate bonus tokens for affiliate referrals
-        const bonusTokens = isAffiliateReferral ? env.AFFILIATE_BONUS_TOKENS : 0;
+        // Check if this is a reactivation by looking for existing subscription
+        const existingSub = await Subscription.findOne({ userId: user._id }).lean();
+        const isReactivation = existingSub && existingSub.status !== 'active';
 
         await SubscriptionService.createSubscription(userId, {
           tier,
-          lemonSqueezyCustomerId: customerId,
-          lemonSqueezySubscriptionId: subscriptionId,
-          lemonSqueezyVariantId: variantId,
+          dodoCustomerId: customerId,
+          dodoSubscriptionId: subscriptionId,
+          dodoProductId: productId,
           currentPeriodEnd: periodEnd,
-          bonusTokens,
+          bonusTokens: 0,
         });
 
-        console.log(`✅ Subscription created for ${resolvedEmail}: ${tier}${bonusTokens > 0 ? ` (+${bonusTokens} bonus tokens)` : ''}`);
+        console.log(`✅ Subscription ${isReactivation ? 'reactivated' : 'created'} for ${resolvedEmail}: ${tier}`);
         
-        // Handle email sending based on whether user is new or existing
         if (isNewUser && generatedPassword) {
-          // New user from payment - send welcome email with generated password
           EmailService.sendPaymentWelcomeEmail(
             resolvedEmail,
             generatedPassword,
             plan.name,
-            bonusTokens
+            0
           ).catch((err) => {
             console.error('Failed to send payment welcome email:', err);
           });
+        } else if (isReactivation) {
+          EmailService.sendSubscriptionReactivatedEmail(resolvedEmail, plan.name).catch((err) => {
+            console.error('Failed to send subscription reactivated email:', err);
+          });
         } else {
-          // Existing user - send regular subscription started email
           EmailService.sendSubscriptionStartedEmail(
             resolvedEmail,
             plan.name,
             plan.price,
-            plan.tokensPerMonth + bonusTokens,
+            plan.tokensPerMonth,
             periodEnd
           ).catch((err) => {
             console.error('Failed to send subscription started email:', err);
@@ -425,115 +437,9 @@ webhooks.post('/lemonsqueezy', async (c) => {
         break;
       }
 
-      case 'subscription_updated': {
-        // Subscription updated (could be plan change)
-        const plan = getSubscriptionPlan(tier);
-        const periodEnd = renewsAt || endsAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-        await SubscriptionService.updateSubscription(userId, {
-          tier,
-          lemonSqueezyVariantId: variantId,
-          currentPeriodEnd: periodEnd,
-          status: status === 'active' ? 'active' : 'paused',
-        });
-
-        console.log(`✅ Subscription updated for ${resolvedEmail}: ${tier}`);
-        break;
-      }
-
-      case 'subscription_cancelled': {
-        // User cancelled - will end at period end
-        const currentSub = await Subscription.findOne({ userId: user._id }).lean();
-        const accessEnds = endsAt || currentSub?.currentPeriodEnd || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-        
-        await SubscriptionService.updateSubscription(userId, {
-          cancelAtPeriodEnd: true,
-        });
-
-        console.log(`⚠️ Subscription cancelled for ${resolvedEmail} (ends at period end)`);
-        
-        // Send cancellation email
-        const cancelPlan = getSubscriptionPlan(currentSub?.tier || tier);
-        EmailService.sendSubscriptionCancelledEmail(
-          resolvedEmail,
-          cancelPlan.name,
-          accessEnds
-        ).catch((err) => {
-          console.error('Failed to send subscription cancelled email:', err);
-        });
-        break;
-      }
-
-      case 'subscription_resumed': {
-        // Subscription reactivated
-        await SubscriptionService.updateSubscription(userId, {
-          status: 'active',
-          cancelAtPeriodEnd: false,
-        });
-
-        console.log(`✅ Subscription resumed for ${resolvedEmail}`);
-        
-        // Send reactivation email
-        const resumePlan = getSubscriptionPlan(tier);
-        EmailService.sendSubscriptionReactivatedEmail(resolvedEmail, resumePlan.name).catch((err) => {
-          console.error('Failed to send subscription reactivated email:', err);
-        });
-        break;
-      }
-
-      case 'subscription_expired': {
-        // Subscription ended - downgrade to free
-        const freePlan = getSubscriptionPlan('free');
-        
-        await SubscriptionService.updateSubscription(userId, {
-          tier: 'free',
-          status: 'active',
-          cancelAtPeriodEnd: false,
-        });
-
-        // Reset to free tier limits
-        await Subscription.findOneAndUpdate(
-          { userId: user._id },
-          {
-            $set: {
-              tokensLimit: freePlan.tokensPerMonth,
-              projectsLimit: freePlan.projectsLimit,
-              tokensUsedThisMonth: 0,
-            },
-          }
-        );
-
-        console.log(`⚠️ Subscription expired for ${resolvedEmail}, downgraded to free`);
-        break;
-      }
-
-      case 'subscription_paused': {
-        await SubscriptionService.updateSubscription(userId, {
-          status: 'paused',
-        });
-
-        console.log(`⏸️ Subscription paused for ${resolvedEmail}`);
-        break;
-      }
-
-      case 'subscription_unpaused': {
-        await SubscriptionService.updateSubscription(userId, {
-          status: 'active',
-        });
-
-        console.log(`▶️ Subscription unpaused for ${resolvedEmail}`);
-        break;
-      }
-
-      case 'subscription_payment_success': {
-        // Payment successful - reset monthly usage for new period
-        const periodEnd = renewsAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-        // Check if this is the first payment (subscription just created)
-        // by looking at when the subscription was created
-        const existingSub = await Subscription.findOne({ userId: user._id }).lean();
-        const isFirstPayment = existingSub && 
-          (Date.now() - new Date(existingSub.createdAt).getTime()) < 5 * 60 * 1000; // Within 5 minutes
+      case 'subscription.renewed': {
+        // Subscription renewed - reset monthly usage
+        const periodEnd = nextBillingDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
         await SubscriptionService.updateSubscription(userId, {
           status: 'active',
@@ -542,18 +448,16 @@ webhooks.post('/lemonsqueezy', async (c) => {
         });
 
         // Reset monthly tokens
-        const paymentSub = await Subscription.findOneAndUpdate(
+        const renewedSub = await Subscription.findOneAndUpdate(
           { userId: user._id },
           { $set: { tokensUsedThisMonth: 0 } },
           { new: true }
         ).lean();
 
-        console.log(`💳 Payment successful for ${resolvedEmail}, usage reset${isFirstPayment ? ' (first payment, skipping renewal email)' : ''}`);
+        console.log(`💳 Subscription renewed for ${resolvedEmail}, usage reset`);
         
-        // Only send renewal email for actual renewals (not first payment)
-        // First payment already gets a welcome email from subscription_created
-        if (paymentSub && !isFirstPayment) {
-          const renewPlan = getSubscriptionPlan(paymentSub.tier as SubscriptionTier);
+        if (renewedSub) {
+          const renewPlan = getSubscriptionPlan(renewedSub.tier as SubscriptionTier);
           EmailService.sendSubscriptionRenewedEmail(
             resolvedEmail,
             renewPlan.name,
@@ -566,48 +470,147 @@ webhooks.post('/lemonsqueezy', async (c) => {
         break;
       }
 
-      case 'subscription_payment_failed': {
-        const failedSub = await Subscription.findOne({ userId: user._id }).lean();
-        
+      case 'subscription.updated': {
+        // Subscription updated (could be various changes)
+        const updatedTier = getTierFromProductId(productId);
+        const periodEnd = nextBillingDate || expiresAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
         await SubscriptionService.updateSubscription(userId, {
-          status: 'past_due',
+          tier: updatedTier,
+          dodoProductId: productId,
+          currentPeriodEnd: periodEnd,
+          cancelAtPeriodEnd: subscription.cancel_at_next_billing_date,
         });
 
-        console.log(`❌ Payment failed for ${resolvedEmail}`);
+        console.log(`✅ Subscription updated for ${resolvedEmail}: ${updatedTier}`);
+        break;
+      }
 
-        // Send payment failed email
-        const failedPlan = getSubscriptionPlan(failedSub?.tier as SubscriptionTier || tier);
-        const retryDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // Retry in 3 days
-        EmailService.sendPaymentFailedEmail(resolvedEmail, failedPlan.name, retryDate).catch((err) => {
+      case 'subscription.plan_changed': {
+        // Plan upgrade/downgrade
+        const newTier = getTierFromProductId(productId);
+        const plan = getSubscriptionPlan(newTier);
+        const periodEnd = nextBillingDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+        await SubscriptionService.updateSubscription(userId, {
+          tier: newTier,
+          dodoProductId: productId,
+          currentPeriodEnd: periodEnd,
+        });
+
+        // Update token and project limits
+        await Subscription.findOneAndUpdate(
+          { userId: user._id },
+          {
+            $set: {
+              tokensLimit: plan.tokensPerMonth,
+              projectsLimit: plan.projectsLimit,
+            },
+          }
+        );
+
+        console.log(`✅ Plan changed for ${resolvedEmail}: ${newTier}`);
+        break;
+      }
+
+      case 'subscription.on_hold': {
+        // Payment failed - subscription on hold
+        const holdSub = await Subscription.findOne({ userId: user._id }).lean();
+        
+        await SubscriptionService.updateSubscription(userId, {
+          status: 'on_hold',
+        });
+
+        console.log(`❌ Subscription on hold for ${resolvedEmail} (payment failed)`);
+
+        const holdPlan = getSubscriptionPlan(holdSub?.tier as SubscriptionTier || tier);
+        const retryDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+        EmailService.sendPaymentFailedEmail(resolvedEmail, holdPlan.name, retryDate).catch((err) => {
           console.error('Failed to send payment failed email:', err);
         });
         break;
       }
 
+      case 'subscription.cancelled': {
+        // User cancelled - may end immediately or at period end
+        const currentSub = await Subscription.findOne({ userId: user._id }).lean();
+        const accessEnds = expiresAt || nextBillingDate || currentSub?.currentPeriodEnd || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        
+        await SubscriptionService.updateSubscription(userId, {
+          status: 'cancelled',
+          cancelAtPeriodEnd: subscription.cancel_at_next_billing_date,
+        });
+
+        console.log(`⚠️ Subscription cancelled for ${resolvedEmail}`);
+        
+        const cancelPlan = getSubscriptionPlan(currentSub?.tier || tier);
+        EmailService.sendSubscriptionCancelledEmail(
+          resolvedEmail,
+          cancelPlan.name,
+          accessEnds
+        ).catch((err) => {
+          console.error('Failed to send subscription cancelled email:', err);
+        });
+        break;
+      }
+
+      case 'subscription.expired': {
+        // Subscription ended - downgrade to free
+        const freePlan = getSubscriptionPlan('free');
+        
+        await SubscriptionService.updateSubscription(userId, {
+          tier: 'free',
+          status: 'expired',
+          cancelAtPeriodEnd: false,
+        });
+
+        await Subscription.findOneAndUpdate(
+          { userId: user._id },
+          {
+            $set: {
+              tokensLimit: freePlan.tokensPerMonth,
+              projectsLimit: freePlan.projectsLimit,
+              tokensUsedThisMonth: 0,
+              dodoSubscriptionId: null,
+              dodoProductId: null,
+            },
+          }
+        );
+
+        console.log(`⚠️ Subscription expired for ${resolvedEmail}, downgraded to free`);
+        break;
+      }
+
+      case 'subscription.failed': {
+        // Subscription creation failed
+        console.log(`❌ Subscription creation failed for ${resolvedEmail}`);
+        break;
+      }
+
       default:
-        console.log(`🍋 Unhandled Lemon Squeezy event: ${eventName}`);
+        console.log(`🔷 Unhandled Dodo Payments event: ${eventType}`);
     }
 
-    return c.json({ success: true, event: eventName });
+    return c.json({ success: true, event: eventType });
 
   } catch (error) {
-    console.error('❌ Lemon Squeezy webhook error:', error);
+    console.error('❌ Dodo Payments webhook error:', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
 /**
- * GET /webhooks/lemonsqueezy/test
+ * GET /webhooks/dodo/test
  * Test endpoint to verify webhook is accessible
  */
-webhooks.get('/lemonsqueezy/test', (c) => {
+webhooks.get('/dodo/test', (c) => {
   return c.json({
     status: 'ok',
-    message: 'Lemon Squeezy webhook endpoint is active',
+    message: 'Dodo Payments webhook endpoint is active',
     plans: {
-      free: '$0/mo - 10,000 tokens',
+      free: '$0/mo - 5,000 tokens',
       pro: '$29/mo - 100,000 tokens',
-      business: '$79/mo - 500,000 tokens',
+      business: '$79/mo - 250,000 tokens',
     },
   });
 });

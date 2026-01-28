@@ -79,11 +79,11 @@ jobs:
             --build-arg FREE_MAX_MESSAGES_PER_SESSION="${{ secrets.FREE_MAX_MESSAGES_PER_SESSION }}" \
             --build-arg RATE_LIMIT_FREE_MESSAGES_PER_MIN="${{ secrets.RATE_LIMIT_FREE_MESSAGES_PER_MIN }}" \
             --build-arg RATE_LIMIT_PRO_MESSAGES_PER_MIN="${{ secrets.RATE_LIMIT_PRO_MESSAGES_PER_MIN }}" \
-            --build-arg LEMONSQUEEZY_STORE_ID="${{ secrets.LEMONSQUEEZY_STORE_ID }}" \
-            --build-arg LEMONSQUEEZY_PRO_VARIANT_ID="${{ secrets.LEMONSQUEEZY_PRO_VARIANT_ID }}" \
-            --build-arg LEMONSQUEEZY_BUSINESS_VARIANT_ID="${{ secrets.LEMONSQUEEZY_BUSINESS_VARIANT_ID }}" \
-            --build-arg LEMONSQUEEZY_API_KEY="${{ secrets.LEMONSQUEEZY_API_KEY }}" \
-            --build-arg LEMONSQUEEZY_WEBHOOK_SECRET="${{ secrets.LEMONSQUEEZY_WEBHOOK_SECRET }}" \
+            --build-arg DODO_PAYMENTS_API_KEY="${{ secrets.DODO_PAYMENTS_API_KEY }}" \
+            --build-arg DODO_PAYMENTS_WEBHOOK_KEY="${{ secrets.DODO_PAYMENTS_WEBHOOK_KEY }}" \
+            --build-arg DODO_PAYMENTS_ENVIRONMENT="${{ vars.DODO_PAYMENTS_ENVIRONMENT }}" \
+            --build-arg DODO_PRO_PRODUCT_ID="${{ vars.DODO_PRO_PRODUCT_ID }}" \
+            --build-arg DODO_BUSINESS_PRODUCT_ID="${{ vars.DODO_BUSINESS_PRODUCT_ID }}" \
             --build-arg FREE_TOKENS_PER_MONTH="${{ vars.FREE_TOKENS_PER_MONTH }}" \
             --build-arg PRO_TOKENS_PER_MONTH="${{ vars.PRO_TOKENS_PER_MONTH }}" \
             --build-arg BUSINESS_TOKENS_PER_MONTH="${{ vars.BUSINESS_TOKENS_PER_MONTH }}" \

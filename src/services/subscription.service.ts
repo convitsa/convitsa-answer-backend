@@ -9,9 +9,9 @@ const LOW_TOKENS_THRESHOLD_PERCENT = 10;
 
 export interface CreateSubscriptionInput {
   tier: SubscriptionTier;
-  lemonSqueezyCustomerId?: string;
-  lemonSqueezySubscriptionId?: string;
-  lemonSqueezyVariantId?: string;
+  dodoCustomerId?: string;
+  dodoSubscriptionId?: string;
+  dodoProductId?: string;
   currentPeriodEnd: Date;
   bonusTokens?: number; // For affiliate referrals
 }
@@ -19,9 +19,9 @@ export interface CreateSubscriptionInput {
 export interface UpdateSubscriptionInput {
   tier?: SubscriptionTier;
   status?: SubscriptionStatus;
-  lemonSqueezyCustomerId?: string;
-  lemonSqueezySubscriptionId?: string;
-  lemonSqueezyVariantId?: string;
+  dodoCustomerId?: string;
+  dodoSubscriptionId?: string;
+  dodoProductId?: string;
   currentPeriodStart?: Date;
   currentPeriodEnd?: Date;
   cancelAtPeriodEnd?: boolean;
@@ -107,9 +107,9 @@ export class SubscriptionService {
       const updateSet: Record<string, any> = {
         tier: input.tier,
         status: 'active',
-        lemonSqueezyCustomerId: input.lemonSqueezyCustomerId,
-        lemonSqueezySubscriptionId: input.lemonSqueezySubscriptionId,
-        lemonSqueezyVariantId: input.lemonSqueezyVariantId,
+        dodoCustomerId: input.dodoCustomerId,
+        dodoSubscriptionId: input.dodoSubscriptionId,
+        dodoProductId: input.dodoProductId,
         currentPeriodStart: now,
         currentPeriodEnd: input.currentPeriodEnd,
         cancelAtPeriodEnd: false,
@@ -178,9 +178,9 @@ export class SubscriptionService {
         updateData.projectsLimit = plan.projectsLimit;
       }
       if (input.status) updateData.status = input.status;
-      if (input.lemonSqueezyCustomerId) updateData.lemonSqueezyCustomerId = input.lemonSqueezyCustomerId;
-      if (input.lemonSqueezySubscriptionId) updateData.lemonSqueezySubscriptionId = input.lemonSqueezySubscriptionId;
-      if (input.lemonSqueezyVariantId) updateData.lemonSqueezyVariantId = input.lemonSqueezyVariantId;
+      if (input.dodoCustomerId) updateData.dodoCustomerId = input.dodoCustomerId;
+      if (input.dodoSubscriptionId) updateData.dodoSubscriptionId = input.dodoSubscriptionId;
+      if (input.dodoProductId) updateData.dodoProductId = input.dodoProductId;
       if (input.currentPeriodStart) updateData.currentPeriodStart = input.currentPeriodStart;
       if (input.currentPeriodEnd) updateData.currentPeriodEnd = input.currentPeriodEnd;
       if (typeof input.cancelAtPeriodEnd === 'boolean') updateData.cancelAtPeriodEnd = input.cancelAtPeriodEnd;
@@ -471,21 +471,21 @@ export class SubscriptionService {
   }
 
   /**
-   * Find subscription by Lemon Squeezy subscription ID
+   * Find subscription by Dodo Payments subscription ID
    */
-  static async findByLemonSqueezyId(subscriptionId: string): Promise<ISubscription | null> {
+  static async findByDodoSubscriptionId(subscriptionId: string): Promise<ISubscription | null> {
     const subscription = await Subscription.findOne({
-      lemonSqueezySubscriptionId: subscriptionId,
+      dodoSubscriptionId: subscriptionId,
     }).lean();
     return subscription as ISubscription | null;
   }
 
   /**
-   * Find subscription by Lemon Squeezy customer ID
+   * Find subscription by Dodo Payments customer ID
    */
-  static async findByLemonSqueezyCustomerId(customerId: string): Promise<ISubscription | null> {
+  static async findByDodoCustomerId(customerId: string): Promise<ISubscription | null> {
     const subscription = await Subscription.findOne({
-      lemonSqueezyCustomerId: customerId,
+      dodoCustomerId: customerId,
     }).lean();
     return subscription as ISubscription | null;
   }
