@@ -119,16 +119,18 @@ export interface DocumentProcessingJob {
 // ============================================================
 
 export type SubscriptionTier = 'free' | 'pro' | 'business';
-export type SubscriptionStatus = 'active' | 'cancelled' | 'past_due' | 'paused' | 'trialing';
+// Dodo Payments subscription statuses
+export type SubscriptionStatus = 'pending' | 'active' | 'on_hold' | 'cancelled' | 'failed' | 'expired';
 
 export interface ISubscription {
   _id: Types.ObjectId;
   userId: Types.ObjectId;
   tier: SubscriptionTier;
   status: SubscriptionStatus;
-  lemonSqueezyCustomerId?: string;
-  lemonSqueezySubscriptionId?: string;
-  lemonSqueezyVariantId?: string;
+  // Dodo Payments fields
+  dodoCustomerId?: string;
+  dodoSubscriptionId?: string;
+  dodoProductId?: string;
   currentPeriodStart: Date;
   currentPeriodEnd: Date;
   cancelAtPeriodEnd: boolean;

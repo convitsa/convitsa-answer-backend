@@ -1,8 +1,15 @@
 import { Hono } from 'hono';
+import DodoPayments from 'dodopayments';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { SubscriptionService } from '../../services/subscription.service';
 import { env, subscriptionPlans, getSubscriptionPlan } from '../../config/env';
 import type { SubscriptionTier } from '../../types';
+
+// Initialize Dodo Payments client
+const dodoClient = new DodoPayments({
+  bearerToken: env.DODO_PAYMENTS_API_KEY,
+  environment: env.DODO_PAYMENTS_ENVIRONMENT as 'test_mode' | 'live_mode',
+});
 
 const subscription = new Hono();
 
@@ -73,7 +80,7 @@ subscription.get('/plans', async (c) => {
 
 /**
  * POST /subscription/checkout
- * Generate a Lemon Squeezy checkout URL via API
+ * Generate a Dodo Payments checkout URL using Checkout Sessions API
  */
 subscription.post('/checkout', async (c) => {
   const user = c.get('user');
@@ -85,14 +92,14 @@ subscription.post('/checkout', async (c) => {
     return c.json({ error: 'Invalid tier. Must be "pro" or "business"', code: 'INVALID_TIER' }, 400);
   }
 
-  // Get variant ID for the tier
-  const variantId = tier === 'pro' 
-    ? env.LEMONSQUEEZY_PRO_VARIANT_ID 
-    : env.LEMONSQUEEZY_BUSINESS_VARIANT_ID;
+  // Get product ID for the tier
+  const productId = tier === 'pro' 
+    ? env.DODO_PRO_PRODUCT_ID 
+    : env.DODO_BUSINESS_PRODUCT_ID;
 
-  if (!variantId) {
+  if (!productId) {
     return c.json({ 
-      error: `Variant ID not configured for ${tier} plan`, 
+      error: `Product ID not configured for ${tier} plan`, 
       code: 'CONFIG_ERROR' 
     }, 500);
   }
@@ -107,79 +114,30 @@ subscription.post('/checkout', async (c) => {
   }
 
   try {
-    // Create checkout via Lemon Squeezy API
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 24); // Checkout expires in 24 hours
-
-    // Build checkout attributes
-    const checkoutAttributes: Record<string, any> = {
-      checkout_data: {
+    // Create checkout session using Dodo Payments SDK
+    const checkoutParams: Parameters<typeof dodoClient.checkoutSessions.create>[0] = {
+      product_cart: [{ product_id: productId, quantity: 1 }],
+      customer: {
         email: user.email,
         name: user.email.split('@')[0],
-        custom: {
-          user_email: user.email,
-          user_id: user.userId,
-        },
       },
-      expires_at: expiresAt.toISOString(),
+      metadata: {
+        user_id: user.userId,
+        user_email: user.email,
+      },
     };
 
-    // Add redirect URL if provided
-    if (redirectUrl) {
-      checkoutAttributes.product_options = {
-        redirect_url: redirectUrl,
-      };
+    // Only add return_url if provided (optional - user stays on Dodo page if not set)
+    const returnUrl = redirectUrl || env.DODO_PAYMENTS_RETURN_URL;
+    if (returnUrl) {
+      checkoutParams.return_url = returnUrl;
     }
 
-    const checkoutResponse = await fetch('https://api.lemonsqueezy.com/v1/checkouts', {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/vnd.api+json',
-        'Content-Type': 'application/vnd.api+json',
-        'Authorization': `Bearer ${env.LEMONSQUEEZY_API_KEY}`,
-      },
-      body: JSON.stringify({
-        data: {
-          type: 'checkouts',
-          attributes: checkoutAttributes,
-          relationships: {
-            store: {
-              data: {
-                type: 'stores',
-                id: env.LEMONSQUEEZY_STORE_ID,
-              },
-            },
-            variant: {
-              data: {
-                type: 'variants',
-                id: variantId,
-              },
-            },
-          },
-        },
-      }),
-    });
+    const session = await dodoClient.checkoutSessions.create(checkoutParams);
 
-    if (!checkoutResponse.ok) {
-      const errorData = await checkoutResponse.text();
-      console.error('❌ Lemon Squeezy API error:', errorData);
-      return c.json({ 
-        error: 'Failed to create checkout', 
-        code: 'CHECKOUT_FAILED' 
-      }, 500);
-    }
+    const checkoutUrl = session.checkout_url;
 
-    const checkoutData = await checkoutResponse.json() as {
-      data: {
-        attributes: {
-          url: string;
-        };
-      };
-    };
-
-    const checkoutUrl = checkoutData.data.attributes.url;
-
-    console.log(`🛒 Generated checkout URL for ${user.email}: ${tier}`);
+    console.log(`🛒 Generated Dodo checkout URL for ${user.email}: ${tier}`);
 
     return c.json({
       checkoutUrl,
@@ -187,7 +145,7 @@ subscription.post('/checkout', async (c) => {
       plan: getSubscriptionPlan(tier),
     });
   } catch (error) {
-    console.error('❌ Checkout creation error:', error);
+    console.error('❌ Dodo checkout creation error:', error);
     return c.json({ 
       error: 'Failed to create checkout', 
       code: 'CHECKOUT_FAILED' 
@@ -197,7 +155,7 @@ subscription.post('/checkout', async (c) => {
 
 /**
  * POST /subscription/portal
- * Generate a Lemon Squeezy customer portal URL
+ * Generate a Dodo Payments customer portal URL
  * Users can manage their subscription, update payment, cancel, etc.
  */
 subscription.post('/portal', async (c) => {
@@ -206,25 +164,32 @@ subscription.post('/portal', async (c) => {
   // Get user's subscription
   const sub = await SubscriptionService.getSubscription(user.userId);
 
-  if (!sub.lemonSqueezyCustomerId) {
+  if (!sub.dodoCustomerId) {
     return c.json({ 
       error: 'No active paid subscription found', 
       code: 'NO_SUBSCRIPTION' 
     }, 400);
   }
 
-  // Lemon Squeezy customer portal URL
-  // Note: In production, you should use the Lemon Squeezy API to generate a secure portal URL
-  // For now, we return a message directing users to their email
-  // The proper way is to use: POST /v1/customer-portal to get a one-time URL
+  try {
+    // Generate customer portal URL using Dodo Payments API
+    const portalResponse = await dodoClient.customers.customerPortal.create(sub.dodoCustomerId, {
+      send_email: false,
+    });
 
-  // For now, return instructions
-  return c.json({
-    message: 'To manage your subscription, please check your email for the Lemon Squeezy customer portal link, or visit your Lemon Squeezy dashboard.',
-    customerId: sub.lemonSqueezyCustomerId,
-    // In production, implement this:
-    // portalUrl: await generateLemonSqueezyPortalUrl(sub.lemonSqueezyCustomerId),
-  });
+    console.log(`🔗 Generated Dodo portal URL for ${user.email}`);
+
+    return c.json({
+      portalUrl: portalResponse.link,
+      customerId: sub.dodoCustomerId,
+    });
+  } catch (error) {
+    console.error('❌ Dodo portal generation error:', error);
+    return c.json({ 
+      error: 'Failed to generate customer portal link', 
+      code: 'PORTAL_FAILED' 
+    }, 500);
+  }
 });
 
 /**
@@ -250,35 +215,18 @@ subscription.post('/cancel', async (c) => {
     }, 400);
   }
 
-  if (!sub.lemonSqueezySubscriptionId) {
+  if (!sub.dodoSubscriptionId) {
     return c.json({ 
-      error: 'No Lemon Squeezy subscription found', 
+      error: 'No Dodo Payments subscription found', 
       code: 'NO_SUBSCRIPTION' 
     }, 400);
   }
 
   try {
-    // Cancel subscription in Lemon Squeezy (at period end)
-    const lsResponse = await fetch(
-      `https://api.lemonsqueezy.com/v1/subscriptions/${sub.lemonSqueezySubscriptionId}`,
-      {
-        method: 'DELETE',
-        headers: {
-          'Accept': 'application/vnd.api+json',
-          'Content-Type': 'application/vnd.api+json',
-          'Authorization': `Bearer ${env.LEMONSQUEEZY_API_KEY}`,
-        },
-      }
-    );
-
-    if (!lsResponse.ok) {
-      const errorData = await lsResponse.text();
-      console.error('❌ Lemon Squeezy cancel error:', errorData);
-      return c.json({ 
-        error: 'Failed to cancel subscription in Lemon Squeezy', 
-        code: 'CANCEL_FAILED' 
-      }, 500);
-    }
+    // Cancel subscription in Dodo Payments (at period end)
+    await dodoClient.subscriptions.update(sub.dodoSubscriptionId, {
+      cancel_at_next_billing_date: true,
+    } as any);
 
     // Mark for cancellation locally
     const result = await SubscriptionService.cancelSubscription(user.userId);
@@ -321,44 +269,18 @@ subscription.post('/reactivate', async (c) => {
     }, 400);
   }
 
-  if (!sub.lemonSqueezySubscriptionId) {
+  if (!sub.dodoSubscriptionId) {
     return c.json({ 
-      error: 'No Lemon Squeezy subscription found', 
+      error: 'No Dodo Payments subscription found', 
       code: 'NO_SUBSCRIPTION' 
     }, 400);
   }
 
   try {
-    // Reactivate subscription in Lemon Squeezy (un-cancel)
-    const lsResponse = await fetch(
-      `https://api.lemonsqueezy.com/v1/subscriptions/${sub.lemonSqueezySubscriptionId}`,
-      {
-        method: 'PATCH',
-        headers: {
-          'Accept': 'application/vnd.api+json',
-          'Content-Type': 'application/vnd.api+json',
-          'Authorization': `Bearer ${env.LEMONSQUEEZY_API_KEY}`,
-        },
-        body: JSON.stringify({
-          data: {
-            type: 'subscriptions',
-            id: sub.lemonSqueezySubscriptionId,
-            attributes: {
-              cancelled: false,
-            },
-          },
-        }),
-      }
-    );
-
-    if (!lsResponse.ok) {
-      const errorData = await lsResponse.text();
-      console.error('❌ Lemon Squeezy reactivate error:', errorData);
-      return c.json({ 
-        error: 'Failed to reactivate subscription in Lemon Squeezy', 
-        code: 'REACTIVATE_FAILED' 
-      }, 500);
-    }
+    // Reactivate subscription in Dodo Payments (un-cancel)
+    await dodoClient.subscriptions.update(sub.dodoSubscriptionId, {
+      cancel_at_next_billing_date: false,
+    } as any);
 
     // Reactivate locally
     const result = await SubscriptionService.reactivateSubscription(user.userId);

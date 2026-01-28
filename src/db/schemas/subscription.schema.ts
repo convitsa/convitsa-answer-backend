@@ -19,19 +19,20 @@ const subscriptionSchema = new Schema<SubscriptionDocument>(
     },
     status: {
       type: String,
-      enum: ['active', 'cancelled', 'past_due', 'paused', 'trialing'] as SubscriptionStatus[],
+      enum: ['pending', 'active', 'on_hold', 'cancelled', 'failed', 'expired'] as SubscriptionStatus[],
       default: 'active',
       required: true,
     },
-    lemonSqueezyCustomerId: {
+    // Dodo Payments fields
+    dodoCustomerId: {
       type: String,
       trim: true,
     },
-    lemonSqueezySubscriptionId: {
+    dodoSubscriptionId: {
       type: String,
       trim: true,
     },
-    lemonSqueezyVariantId: {
+    dodoProductId: {
       type: String,
       trim: true,
     },
@@ -80,8 +81,8 @@ const subscriptionSchema = new Schema<SubscriptionDocument>(
 );
 
 // Indexes
-subscriptionSchema.index({ lemonSqueezyCustomerId: 1 }, { sparse: true });
-subscriptionSchema.index({ lemonSqueezySubscriptionId: 1 }, { sparse: true });
+subscriptionSchema.index({ dodoCustomerId: 1 }, { sparse: true });
+subscriptionSchema.index({ dodoSubscriptionId: 1 }, { sparse: true });
 subscriptionSchema.index({ status: 1 });
 subscriptionSchema.index({ tier: 1 });
 subscriptionSchema.index({ currentPeriodEnd: 1 });
