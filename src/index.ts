@@ -10,6 +10,7 @@ import { ApiKeyService } from './services/project.service';
 import { BlobService } from './services/blob.service';
 import { DocumentWorker } from './workers/document.worker';
 import { ChatSession, Project } from './db/schemas';
+import { SubscriptionService } from './services/subscription.service';
 import { checkRateLimit, incrementConnections, decrementConnections, getConnectionCount } from './db/redis';
 import { getTierConfig } from './config/env';
 import { handleChatMessage } from './ws/handlers/chat.handler';
@@ -113,7 +114,7 @@ async function startServer() {
       
       websocket: {
         async open(ws) {
-          const { token, tier } = ws.data;
+          const { token } = ws.data;
           
           // Validate API key
           const keyResult = await ApiKeyService.validateApiKey(token);
@@ -124,6 +125,21 @@ async function startServer() {
           }
           
           const { apiKeyId, projectId, userId } = keyResult.data!;
+          
+          // Get subscription tier from database (NOT from query params!)
+          let tier: ChatTier = 'free';
+          try {
+            const subscription = await SubscriptionService.getSubscription(userId.toString());
+            if (subscription) {
+              tier = subscription.tier as ChatTier;
+              console.log(`🎫 User ${userId} subscription: tier=${tier}, status=${subscription.status}`);
+            } else {
+              console.log(`⚠️ No subscription found for user ${userId}, using free tier`);
+            }
+          } catch (error) {
+            console.error(`❌ Error getting subscription for user ${userId}:`, error);
+            // Continue with free tier on error
+          }
           
           // Check connection limit
           const connectionCount = await getConnectionCount(apiKeyId.toString());
@@ -144,11 +160,11 @@ async function startServer() {
             return;
           }
           
-          // Create session
+          // Create session with tier from subscription
           const session = await ChatSession.create({
             projectId,
             apiKeyId,
-            tier: tier as ChatTier,
+            tier,
             startedAt: new Date(),
             totalTokens: 0,
             messageCount: 0,
@@ -160,8 +176,9 @@ async function startServer() {
           ws.data.userId = userId.toString();
           ws.data.sessionId = session._id.toString();
           ws.data.websiteUrl = project.websiteUrl;
+          ws.data.tier = tier; // Store actual tier from subscription
           
-          console.log(`🔗 WS connected: project=${projectId}, tier=${tier}`);
+          console.log(`🔗 WS connected: project=${projectId}, tier=${tier}, user=${userId}`);
         },
         
         async message(ws, message) {
