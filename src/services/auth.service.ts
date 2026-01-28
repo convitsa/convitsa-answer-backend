@@ -6,6 +6,7 @@ import { User, EmailVerification, CreditBalance } from '../db/schemas';
 import type { JwtPayload, ServiceResult } from '../types';
 import { generateVerificationCode, hashSHA256 } from '../utils/helpers';
 import { EmailService } from './email.service';
+import { SubscriptionService } from './subscription.service';
 
 const SALT_ROUNDS = 12;
 const VERIFICATION_EXPIRY_MINUTES = 10;
@@ -57,6 +58,9 @@ export class AuthService {
         balance: 0,
         updatedAt: new Date(),
       });
+
+      // Create free subscription for new user
+      await SubscriptionService.createFreeSubscription(user._id.toString());
 
       // Generate and send verification code
       await this.sendVerificationCode(user._id.toString(), email);
