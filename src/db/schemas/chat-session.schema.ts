@@ -17,7 +17,7 @@ const chatSessionSchema = new Schema<ChatSessionDocument>(
     },
     tier: {
       type: String,
-      enum: ['free', 'pro'] as ChatTier[],
+      enum: ['free', 'pro', 'business'] as ChatTier[],
       required: true,
     },
     visitorId: {
