@@ -12,6 +12,7 @@ export { SubscriptionService } from './subscription.service';
 export { LeadService } from './lead.service';
 export { WebhookService } from './webhook.service';
 export { UnansweredQuestionService } from './unanswered-question.service';
+export { LostLeadService } from './lost-lead.service';
 
 // Magic link service
 export { MagicLinkService } from './magic-link.service';

@@ -22,6 +22,7 @@ export { Subscription, type SubscriptionDocument } from './subscription.schema';
 export { Lead, type LeadDocument } from './lead.schema';
 export { ConversionEvent, type ConversionEventDocument } from './conversion-event.schema';
 export { UnansweredQuestion, type UnansweredQuestionDocument } from './unanswered-question.schema';
+export { LostLead, type LostLeadDocument } from './lost-lead.schema';
 
 // Magic link schema
 export { MagicLink, type MagicLinkDocument, type IMagicLink } from './magic-link.schema';

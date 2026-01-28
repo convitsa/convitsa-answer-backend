@@ -1,8 +1,9 @@
 import { Types } from 'mongoose';
 import { Page, DocumentChunk } from '../db/schemas';
 import { EmbeddingService } from './embedding.service';
+import { ChatService } from './chat.service';
 import { getTierConfig } from '../config/env';
-import type { RetrievedContext, ChatTier, MarketingConfig, AIPersonality } from '../types';
+import type { RetrievedContext, ChatTier, MarketingConfig, AIPersonality, IntentScoreResult, IChatMessage } from '../types';
 
 // In-memory cache for embeddings (per project)
 interface CachedPage {
@@ -419,6 +420,14 @@ ${personalityInstructions}
   • "If you'd like, I can send you more details — what's the best email?"
   • "Want to see how this would work for your specific site or use case?"
   • "Would it help to have someone from our team walk you through it?"
+
+**Subtle Contact Capture (IMPORTANT)**
+When the conversation shows genuine interest (pricing questions, specific use cases, timeline discussions), naturally suggest helpful next steps that involve contact:
+- "I can have our team send you detailed pricing — what's your email?"
+- "Want me to set up a quick call to walk through this? Just share your email."
+- "I'd love to share some case studies with you — where should I send them?"
+
+Do this only ONCE per conversation, and only when intent is clearly high. Never be pushy or repeat the ask if declined.
 ${fallbackInstructions}
 ${convitsaPromotion}
 The context below contains accurate information from the knowledge base:`;
@@ -605,6 +614,77 @@ The context below contains accurate information from the knowledge base:`;
     });
 
     return messages;
+  }
+
+  /**
+   * Score the intent of a conversation session using AI
+   * Returns a score from 0-100 and detected intent signals
+   */
+  static async scoreSessionIntent(messages: IChatMessage[]): Promise<IntentScoreResult> {
+    if (messages.length === 0) {
+      return { score: 0, signals: [], summary: 'No messages to analyze' };
+    }
+
+    // Filter to only user and assistant messages
+    const conversationMessages = messages
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => `${m.role.toUpperCase()}: ${m.content}`)
+      .join('\n\n');
+
+    const systemPrompt = `You are an expert at analyzing sales conversations to determine buyer intent.
+
+Analyze the following conversation and provide:
+1. An intent score from 0-100:
+   - 0-30: Low intent (casual browsing, general questions)
+   - 31-60: Medium intent (specific questions, comparing options)
+   - 61-80: High intent (pricing questions, timeline discussions, specific use cases)
+   - 81-100: Very high intent (ready to buy, asking about next steps)
+
+2. A list of intent signals detected (return as comma-separated list):
+   - pricing_interest: Asked about cost, pricing, or budget
+   - timeline_mentioned: Mentioned deadlines or timelines
+   - specific_use_case: Described a specific problem or use case
+   - comparison_shopping: Mentioned competitors or alternatives
+   - decision_maker: Indicated they have buying authority
+   - objection_raised: Expressed concerns or objections
+   - demo_interest: Showed interest in demo or trial
+   - multiple_sessions: Returned for multiple conversations
+   - detailed_questions: Asked specific technical or implementation questions
+   - urgency_expressed: Indicated time pressure or urgency
+
+3. A brief summary (1-2 sentences) of the visitor's intent and what they were looking for.
+
+Respond ONLY in this exact JSON format:
+{
+  "score": <number 0-100>,
+  "signals": ["signal1", "signal2"],
+  "summary": "<brief summary>"
+}`;
+
+    try {
+      // Use pro tier for intent scoring to get enough tokens
+      const response = await ChatService.generateCompletion([
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Analyze this conversation:\n\n${conversationMessages}` },
+      ], 'pro');
+
+      // Parse the JSON response
+      const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.error('Failed to parse intent scoring response:', response.content);
+        return { score: 0, signals: [], summary: 'Analysis failed' };
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        score: Math.min(100, Math.max(0, parseInt(parsed.score) || 0)),
+        signals: Array.isArray(parsed.signals) ? parsed.signals : [],
+        summary: parsed.summary || 'No summary available',
+      };
+    } catch (error) {
+      console.error('Intent scoring error:', error);
+      return { score: 0, signals: [], summary: 'Analysis failed' };
+    }
   }
 }
 

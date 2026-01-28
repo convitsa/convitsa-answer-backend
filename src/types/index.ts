@@ -160,15 +160,24 @@ export interface SubscriptionPlan {
 
 export type ChatTier = 'free' | 'pro' | 'business';
 
+export interface SessionMetadata {
+  userAgent?: string;
+  referrer?: string;
+  pageUrl?: string;
+}
+
 export interface IChatSession {
   _id: Types.ObjectId;
   projectId: Types.ObjectId;
   apiKeyId: Types.ObjectId;
   tier: ChatTier;
+  visitorId?: string;
   startedAt: Date;
   endedAt?: Date;
   totalTokens: number;
   messageCount: number;
+  metadata?: SessionMetadata;
+  leadCaptured?: boolean;
 }
 
 export type MessageRole = 'user' | 'assistant' | 'system';
@@ -247,6 +256,7 @@ export interface WSReadyResponse {
   type: 'ready';
   sessionId: string;
   tier: ChatTier;
+  visitorId: string;
 }
 
 export type WSServerMessage = WSChunkResponse | WSDoneResponse | WSErrorResponse | WSReadyResponse;
@@ -256,6 +266,7 @@ export interface AuthenticatedWebSocket extends WebSocket {
   projectId: Types.ObjectId;
   tier: ChatTier;
   sessionId: Types.ObjectId;
+  visitorId: string;
   isAlive: boolean;
 }
 
@@ -354,6 +365,50 @@ export interface IUnansweredQuestion {
   answeredBy?: Types.ObjectId;
   answeredAt?: Date;
   createdAt: Date;
+}
+
+// ============================================================
+// Lost Lead Intelligence Types
+// ============================================================
+
+export type LostLeadStatus = 'lost' | 'converted' | 'archived';
+
+export interface DropOffPoint {
+  lastUserMessage?: string;
+  lastAiResponse?: string;
+  messageIndex: number;
+  timestamp?: Date;
+}
+
+export interface LostLeadMetadata {
+  userAgent?: string;
+  referrer?: string;
+  pageUrl?: string;
+}
+
+export interface ILostLead {
+  _id: Types.ObjectId;
+  projectId: Types.ObjectId;
+  visitorId: string;
+  sessionIds: Types.ObjectId[];
+  intentScore: number;
+  intentSignals: string[];
+  intentSummary?: string;
+  dropOffPoint?: DropOffPoint;
+  status: LostLeadStatus;
+  totalMessages: number;
+  totalSessions: number;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  metadata?: LostLeadMetadata;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export interface IntentScoreResult {
+  score: number;
+  signals: string[];
+  summary: string;
 }
 
 export type AIPersonality = 'friendly_sales' | 'consultative' | 'urgency_driven';

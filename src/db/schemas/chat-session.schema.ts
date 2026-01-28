@@ -20,6 +20,10 @@ const chatSessionSchema = new Schema<ChatSessionDocument>(
       enum: ['free', 'pro'] as ChatTier[],
       required: true,
     },
+    visitorId: {
+      type: String,
+      trim: true,
+    },
     startedAt: {
       type: Date,
       default: Date.now,
@@ -36,6 +40,17 @@ const chatSessionSchema = new Schema<ChatSessionDocument>(
       type: Number,
       default: 0,
     },
+    // Lost Lead Intelligence metadata
+    metadata: {
+      userAgent: String,
+      referrer: String,
+      pageUrl: String,
+    },
+    // Whether a lead was captured from this session
+    leadCaptured: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: false,
@@ -47,6 +62,8 @@ const chatSessionSchema = new Schema<ChatSessionDocument>(
 chatSessionSchema.index({ projectId: 1, startedAt: -1 });
 chatSessionSchema.index({ apiKeyId: 1 });
 chatSessionSchema.index({ startedAt: -1 });
+chatSessionSchema.index({ visitorId: 1 });
+chatSessionSchema.index({ projectId: 1, visitorId: 1 });
 
 export const ChatSession: Model<ChatSessionDocument> = mongoose.model<ChatSessionDocument>(
   'ChatSession',

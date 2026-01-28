@@ -2,9 +2,12 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import type { Server } from 'http';
 import { Types } from 'mongoose';
+import { randomUUID } from 'crypto';
 import { ApiKeyService } from '../services/project.service';
 import { SubscriptionService } from '../services/subscription.service';
-import { ChatSession, Project } from '../db/schemas';
+import { LostLeadService } from '../services/lost-lead.service';
+import { RAGService } from '../services/rag.service';
+import { ChatSession, ChatMessage, Lead, Project } from '../db/schemas';
 import {
   checkRateLimit,
   incrementConnections,
@@ -14,7 +17,7 @@ import {
 import { env, getTierConfig } from '../config/env';
 import { parseWSQuery } from '../utils/helpers';
 import { handleChatMessage } from './handlers/chat.handler';
-import type { AuthenticatedWebSocket, ChatTier, WSClientMessage, WSErrorResponse, WSReadyResponse } from '../types';
+import type { AuthenticatedWebSocket, ChatTier, WSClientMessage, WSErrorResponse, WSReadyResponse, IChatMessage } from '../types';
 
 const HEARTBEAT_INTERVAL = 30000; // 30 seconds
 
@@ -49,7 +52,10 @@ export function createWebSocketServer(server: Server): WebSocketServer {
 
     // Parse query parameters
     const url = req.url || '';
-    const { token } = parseWSQuery(url);
+    const { token, visitorId: providedVisitorId, userAgent, referrer, pageUrl } = parseWSQuery(url);
+
+    // Generate visitor ID if not provided
+    const visitorId = providedVisitorId || randomUUID();
 
     // Validate required parameters
     if (!token) {
@@ -99,9 +105,16 @@ export function createWebSocketServer(server: Server): WebSocketServer {
         projectId,
         apiKeyId,
         tier,
+        visitorId,
         startedAt: new Date(),
         totalTokens: 0,
         messageCount: 0,
+        leadCaptured: false,
+        metadata: {
+          userAgent: userAgent || req.headers['user-agent'],
+          referrer,
+          pageUrl,
+        },
       }),
     ]);
 
@@ -110,11 +123,12 @@ export function createWebSocketServer(server: Server): WebSocketServer {
     authWs.projectId = projectId;
     authWs.tier = tier;
     authWs.sessionId = session._id as Types.ObjectId;
+    authWs.visitorId = visitorId;
 
-    console.log(`🔗 New WS connection: project=${projectId}, tier=${tier}, session=${session._id}`);
+    console.log(`🔗 New WS connection: project=${projectId}, tier=${tier}, session=${session._id}, visitor=${visitorId}`);
 
     // Send ready message to client so they know connection is initialized
-    sendReady(ws, session._id.toString(), tier);
+    sendReady(ws, session._id.toString(), tier, visitorId);
 
     // Handle pong for heartbeat
     ws.on('pong', () => {
@@ -184,6 +198,42 @@ export function createWebSocketServer(server: Server): WebSocketServer {
         { _id: authWs.sessionId },
         { $set: { endedAt: new Date() } }
       );
+
+      // Process lost lead if no lead was captured (Pro/Business tiers only)
+      if (tier !== 'free' && authWs.visitorId) {
+        try {
+          // Check if a lead was captured for this session
+          const leadExists = await Lead.findOne({ sessionId: authWs.sessionId });
+          
+          if (!leadExists) {
+            // Get messages for intent scoring
+            const messages = await ChatMessage.find({ sessionId: authWs.sessionId })
+              .sort({ createdAt: 1 })
+              .lean() as IChatMessage[];
+
+            // Only process if there were actual messages
+            if (messages.length >= 2) {
+              console.log(`🔍 Processing lost lead for visitor=${authWs.visitorId}, messages=${messages.length}`);
+              
+              // Score intent using AI
+              const intentResult = await RAGService.scoreSessionIntent(messages);
+              
+              console.log(`📊 Intent score for visitor=${authWs.visitorId}: ${intentResult.score} (${intentResult.signals.join(', ')})`);
+              
+              // Update lost lead record
+              await LostLeadService.updateFromSession(authWs.sessionId, intentResult);
+            }
+          } else {
+            // Mark session as having captured a lead
+            await ChatSession.updateOne(
+              { _id: authWs.sessionId },
+              { $set: { leadCaptured: true } }
+            );
+          }
+        } catch (error) {
+          console.error('Lost lead processing error:', error);
+        }
+      }
     });
 
     // Handle errors
@@ -198,11 +248,12 @@ export function createWebSocketServer(server: Server): WebSocketServer {
 /**
  * Send ready message to client when connection is initialized
  */
-function sendReady(ws: WebSocket, sessionId: string, tier: ChatTier): void {
+function sendReady(ws: WebSocket, sessionId: string, tier: ChatTier, visitorId: string): void {
   const response: WSReadyResponse = {
     type: 'ready',
     sessionId,
     tier,
+    visitorId,
   };
   
   if (ws.readyState === WebSocket.OPEN) {

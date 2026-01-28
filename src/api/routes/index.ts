@@ -8,6 +8,7 @@ import { feedbackRoutes } from './feedback.routes';
 import { documentRoutes } from './document.routes';
 import { webhookRoutes } from './webhook.routes';
 import { leadRoutes } from './lead.routes';
+import { lostLeadRoutes } from './lost-lead.routes';
 import { unansweredRoutes } from './unanswered.routes';
 import { subscriptionRoutes } from './subscription.routes';
 import { authRateLimit, signupRateLimit, apiRateLimit } from '../middleware/rate-limit.middleware';
@@ -47,6 +48,7 @@ protectedRoutes.route('/projects', projectRoutes);
 protectedRoutes.route('/projects', analyticsRoutes); // /projects/:id/analytics, /projects/:id/sessions
 protectedRoutes.route('/projects', documentRoutes); // /projects/:id/documents
 protectedRoutes.route('/projects', leadRoutes); // /projects/:id/leads
+protectedRoutes.route('/projects', lostLeadRoutes); // /projects/:id/lost-leads
 protectedRoutes.route('/projects', unansweredRoutes); // /projects/:id/questions
 protectedRoutes.route('/subscription', subscriptionRoutes); // /subscription
 protectedRoutes.route('/api-keys', apiKeyRoutes);

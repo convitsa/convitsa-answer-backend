@@ -221,12 +221,23 @@ export function createRateLimitKey(prefix: string, identifier: string): string {
 /**
  * Parse WebSocket query parameters
  */
-export function parseWSQuery(url: string): { token?: string; tier?: string } {
+export function parseWSQuery(url: string): { 
+  token?: string; 
+  tier?: string;
+  visitorId?: string;
+  userAgent?: string;
+  referrer?: string;
+  pageUrl?: string;
+} {
   try {
     const searchParams = new URL(url, 'http://localhost').searchParams;
     return {
       token: searchParams.get('token') || undefined,
       tier: searchParams.get('tier') || undefined,
+      visitorId: searchParams.get('visitorId') || searchParams.get('visitor_id') || undefined,
+      userAgent: searchParams.get('userAgent') || searchParams.get('user_agent') || undefined,
+      referrer: searchParams.get('referrer') || searchParams.get('ref') || undefined,
+      pageUrl: searchParams.get('pageUrl') || searchParams.get('page_url') || searchParams.get('page') || undefined,
     };
   } catch {
     return {};
