@@ -85,6 +85,69 @@ async function startServer() {
       console.error('Document worker error:', error);
     });
 
+    // Message queue for messages received before connection is ready
+    const pendingMessages = new Map<string, string[]>();
+    
+    // Process a chat message (used both for direct messages and queued messages)
+    async function processMessage(ws: any, messageStr: string) {
+      try {
+        const msgData = JSON.parse(messageStr);
+        
+        if (msgData.type !== 'message' || typeof msgData.content !== 'string') {
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format', code: 'INVALID_FORMAT' }));
+          return;
+        }
+        
+        if (msgData.content.length > 4096) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Message too long', code: 'MESSAGE_TOO_LONG' }));
+          return;
+        }
+        
+        const tier = (ws.data.tier || 'free') as ChatTier;
+        const config = getTierConfig(tier);
+        
+        // Check rate limit
+        const rateLimitResult = await checkRateLimit(
+          `chat:${ws.data.apiKeyId}`,
+          config.messagesPerMin,
+          60
+        );
+        
+        if (!rateLimitResult.allowed) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: tier === 'free' 
+              ? 'Free tier rate limit reached. Please wait.'
+              : 'Rate limit reached. Please slow down.',
+            code: 'RATE_LIMIT'
+          }));
+          return;
+        }
+        
+        // Create a wrapper that matches AuthenticatedWebSocket interface
+        const authWs = {
+          send: (msg: string) => ws.send(msg),
+          readyState: 1,
+          apiKeyId: ws.data.apiKeyId,
+          projectId: ws.data.projectId,
+          tier: ws.data.tier,
+          sessionId: ws.data.sessionId,
+          visitorId: ws.data.visitorId,
+          isAlive: true,
+        } as unknown as AuthenticatedWebSocket;
+        
+        await handleChatMessage(
+          authWs,
+          msgData.content,
+          ws.data.websiteUrl || '',
+          ws.data.userId || ''
+        );
+      } catch (error) {
+        console.error('WS message error:', error);
+        ws.send(JSON.stringify({ type: 'error', message: 'Internal error', code: 'INTERNAL_ERROR' }));
+      }
+    }
+    
     // Start Bun server with WebSocket support
     const server = Bun.serve<{ token: string; visitorId: string; [key: string]: any }>({
       port: env.PORT,
@@ -122,11 +185,17 @@ async function startServer() {
         async open(ws) {
           const { token, visitorId, pageUrl, referrer, userAgent } = ws.data;
           
+          // Generate unique connection ID for message queueing
+          const connectionId = crypto.randomUUID();
+          ws.data.connectionId = connectionId;
+          ws.data.isReady = false;
+          
           // Validate API key
           const keyResult = await ApiKeyService.validateApiKey(token);
           if (!keyResult.success) {
             ws.send(JSON.stringify({ type: 'error', message: 'Invalid API key', code: 'INVALID_API_KEY' }));
             ws.close(4002, 'Invalid API key');
+            pendingMessages.delete(connectionId);
             return;
           }
           
@@ -141,12 +210,14 @@ async function startServer() {
               console.log(`⚠️ No subscription found for user ${userId}`);
               ws.send(JSON.stringify({ type: 'error', message: 'No active subscription found', code: 'NO_SUBSCRIPTION' }));
               ws.close(4005, 'No subscription');
+              pendingMessages.delete(connectionId);
               return;
             }
           } catch (error) {
             console.error(`❌ Subscription lookup failed for userId=${userId}:`, error);
             ws.send(JSON.stringify({ type: 'error', message: 'Subscription lookup failed', code: 'SUBSCRIPTION_ERROR' }));
             ws.close(4005, 'Subscription error');
+            pendingMessages.delete(connectionId);
             return;
           }
           
@@ -163,6 +234,7 @@ async function startServer() {
           if (connectionCount >= env.MAX_WS_CONNECTIONS_PER_KEY) {
             ws.send(JSON.stringify({ type: 'error', message: 'Connection limit reached', code: 'CONNECTION_LIMIT' }));
             ws.close(4003, 'Connection limit reached');
+            pendingMessages.delete(connectionId);
             return;
           }
           
@@ -170,6 +242,7 @@ async function startServer() {
           if (!project) {
             ws.send(JSON.stringify({ type: 'error', message: 'Project not found', code: 'PROJECT_NOT_FOUND' }));
             ws.close(4004, 'Project not found');
+            pendingMessages.delete(connectionId);
             return;
           }
           
@@ -199,7 +272,8 @@ async function startServer() {
           ws.data.userId = userId.toString();
           ws.data.sessionId = session._id.toString();
           ws.data.websiteUrl = project.websiteUrl;
-          ws.data.tier = tier; // Store actual tier from subscription
+          ws.data.tier = tier;
+          ws.data.isReady = true; // Mark connection as ready
           
           console.log(`🔗 WS connected: project=${projectId}, tier=${tier}, user=${userId}, visitor=${visitorId}`);
           
@@ -210,79 +284,49 @@ async function startServer() {
             tier,
             visitorId,
           }));
-        },
-        
-        async message(ws, message) {
-          try {
-            // Validate connection is properly initialized
-            if (!ws.data.sessionId || !ws.data.projectId || !ws.data.apiKeyId) {
-              console.error('WS message received before connection fully initialized');
-              ws.send(JSON.stringify({ 
-                type: 'error', 
-                message: 'Connection not ready. Please wait and try again.', 
-                code: 'CONNECTION_NOT_READY' 
-              }));
-              return;
+          
+          // Process any queued messages that arrived before connection was ready
+          const queued = pendingMessages.get(connectionId);
+          if (queued && queued.length > 0) {
+            console.log(`📬 Processing ${queued.length} queued messages for connection ${connectionId}`);
+            for (const queuedMsg of queued) {
+              // Re-emit as if the message just arrived
+              try {
+                await processMessage(ws, queuedMsg);
+              } catch (err) {
+                console.error('Error processing queued message:', err);
+              }
             }
-            
-            const msgData = JSON.parse(message.toString());
-            
-            if (msgData.type !== 'message' || typeof msgData.content !== 'string') {
-              ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format', code: 'INVALID_FORMAT' }));
-              return;
-            }
-            
-            if (msgData.content.length > 4096) {
-              ws.send(JSON.stringify({ type: 'error', message: 'Message too long', code: 'MESSAGE_TOO_LONG' }));
-              return;
-            }
-            
-            const tier = (ws.data.tier || 'free') as ChatTier;
-            const config = getTierConfig(tier);
-            
-            // Check rate limit
-            const rateLimitResult = await checkRateLimit(
-              `chat:${ws.data.apiKeyId}`,
-              config.messagesPerMin,
-              60
-            );
-            
-            if (!rateLimitResult.allowed) {
-              ws.send(JSON.stringify({
-                type: 'error',
-                message: tier === 'free' 
-                  ? 'Free tier rate limit reached. Please wait.'
-                  : 'Rate limit reached. Please slow down.',
-                code: 'RATE_LIMIT'
-              }));
-              return;
-            }
-            
-            // Create a wrapper that matches AuthenticatedWebSocket interface
-            const authWs = {
-              send: (msg: string) => ws.send(msg),
-              readyState: 1,
-              apiKeyId: ws.data.apiKeyId,
-              projectId: ws.data.projectId,
-              tier: ws.data.tier,
-              sessionId: ws.data.sessionId,
-              isAlive: true,
-            } as unknown as AuthenticatedWebSocket;
-            
-            await handleChatMessage(
-              authWs,
-              msgData.content,
-              ws.data.websiteUrl || '',
-              ws.data.userId || ''
-            );
-          } catch (error) {
-            console.error('WS message error:', error);
-            ws.send(JSON.stringify({ type: 'error', message: 'Internal error', code: 'INTERNAL_ERROR' }));
+            pendingMessages.delete(connectionId);
           }
         },
         
+        async message(ws, message) {
+          const messageStr = message.toString();
+          
+          // If connection is not ready, queue the message silently
+          if (!ws.data.isReady) {
+            const connectionId = ws.data.connectionId;
+            if (connectionId) {
+              const queue = pendingMessages.get(connectionId) || [];
+              queue.push(messageStr);
+              pendingMessages.set(connectionId, queue);
+              console.log(`📥 Message queued for connection ${connectionId} (connection not ready)`);
+            }
+            return;
+          }
+          
+          // Connection is ready, process the message
+          await processMessage(ws, messageStr);
+        },
+        
         async close(ws) {
-          const { apiKeyId, sessionId, tier, visitorId } = ws.data;
+          const { apiKeyId, sessionId, tier, visitorId, connectionId } = ws.data;
+          
+          // Clean up any pending messages
+          if (connectionId) {
+            pendingMessages.delete(connectionId);
+          }
           
           if (apiKeyId) {
             await decrementConnections(apiKeyId);
