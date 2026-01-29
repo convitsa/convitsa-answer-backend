@@ -328,7 +328,8 @@ export type LeadSource = 'chat' | 'form';
 export interface ILead {
   _id: Types.ObjectId;
   projectId: Types.ObjectId;
-  sessionId?: Types.ObjectId;
+  visitorId?: string;
+  sessionIds: Types.ObjectId[];
   email?: string;
   phone?: string;
   name?: string;
@@ -337,6 +338,10 @@ export interface ILead {
   status: LeadStatus;
   notes?: string;
   capturedAt: Date;
+  // AI-generated conversation analysis
+  conversationSummary?: string;
+  intentScore?: number;
+  intentSignals?: string[];
   metadata?: Record<string, any>;
 }
 

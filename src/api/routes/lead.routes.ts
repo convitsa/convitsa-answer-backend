@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { Types } from 'mongoose';
 import { authMiddleware } from '../middleware/auth.middleware';
-import { Project, Lead } from '../../db/schemas';
+import { Project, Lead, ChatMessage } from '../../db/schemas';
 import { LeadService } from '../../services/lead.service';
 import type { LeadStatus, LeadSource } from '../../types';
 
@@ -49,6 +49,9 @@ leads.get('/:projectId/leads', async (c) => {
   return c.json({
     leads: result.leads.map((lead) => ({
       id: lead._id.toString(),
+      visitorId: lead.visitorId,
+      sessionIds: lead.sessionIds?.map((id) => id.toString()) || [],
+      totalSessions: lead.sessionIds?.length || 0,
       email: lead.email,
       phone: lead.phone,
       name: lead.name,
@@ -57,6 +60,9 @@ leads.get('/:projectId/leads', async (c) => {
       status: lead.status,
       notes: lead.notes,
       capturedAt: lead.capturedAt,
+      conversationSummary: lead.conversationSummary,
+      intentScore: lead.intentScore,
+      intentSignals: lead.intentSignals,
       metadata: lead.metadata,
     })),
     total: result.total,
@@ -172,7 +178,7 @@ leads.post('/:projectId/leads/export', async (c) => {
 
 /**
  * GET /projects/:projectId/leads/:leadId
- * Get a single lead by ID
+ * Get a single lead by ID with conversation messages from all sessions
  */
 leads.get('/:projectId/leads/:leadId', async (c) => {
   const user = c.get('user');
@@ -191,9 +197,35 @@ leads.get('/:projectId/leads/:leadId', async (c) => {
     return c.json({ error: 'Lead not found', code: 'NOT_FOUND' }, 404);
   }
 
+  // Fetch conversation messages from all sessions
+  let messages: Array<{ 
+    sessionId: string;
+    role: string; 
+    content: string; 
+    createdAt: Date;
+  }> = [];
+  
+  if (lead.sessionIds && lead.sessionIds.length > 0) {
+    const sessionMessages = await ChatMessage.find({
+      sessionId: { $in: lead.sessionIds },
+    })
+      .sort({ createdAt: 1 })
+      .lean();
+    
+    messages = sessionMessages.map((msg) => ({
+      sessionId: msg.sessionId.toString(),
+      role: msg.role,
+      content: msg.content,
+      createdAt: msg.createdAt,
+    }));
+  }
+
   return c.json({
     lead: {
       id: lead._id.toString(),
+      visitorId: lead.visitorId,
+      sessionIds: lead.sessionIds?.map((id) => id.toString()) || [],
+      totalSessions: lead.sessionIds?.length || 0,
       email: lead.email,
       phone: lead.phone,
       name: lead.name,
@@ -202,8 +234,13 @@ leads.get('/:projectId/leads/:leadId', async (c) => {
       status: lead.status,
       notes: lead.notes,
       capturedAt: lead.capturedAt,
+      conversationSummary: lead.conversationSummary,
+      intentScore: lead.intentScore,
+      intentSignals: lead.intentSignals,
       metadata: lead.metadata,
     },
+    messages,
+    totalMessages: messages.length,
   });
 });
 

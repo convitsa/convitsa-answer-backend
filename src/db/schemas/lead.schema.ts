@@ -10,9 +10,16 @@ const leadSchema = new Schema<LeadDocument>(
       ref: 'Project',
       required: true,
     },
-    sessionId: {
-      type: Schema.Types.ObjectId,
+    // Visitor ID for tracking across sessions
+    visitorId: {
+      type: String,
+      trim: true,
+    },
+    // All sessions this visitor had before converting
+    sessionIds: {
+      type: [Schema.Types.ObjectId],
       ref: 'ChatSession',
+      default: [],
     },
     email: {
       type: String,
@@ -52,6 +59,20 @@ const leadSchema = new Schema<LeadDocument>(
       type: Date,
       default: Date.now,
     },
+    // AI-generated conversation analysis
+    conversationSummary: {
+      type: String,
+      maxlength: 2000,
+    },
+    intentScore: {
+      type: Number,
+      min: 0,
+      max: 100,
+    },
+    intentSignals: {
+      type: [String],
+      default: [],
+    },
     metadata: {
       type: Schema.Types.Mixed,
       default: {},
@@ -67,6 +88,7 @@ const leadSchema = new Schema<LeadDocument>(
 leadSchema.index({ projectId: 1, capturedAt: -1 });
 leadSchema.index({ projectId: 1, status: 1 });
 leadSchema.index({ projectId: 1, email: 1 });
-leadSchema.index({ sessionId: 1 });
+leadSchema.index({ visitorId: 1 });
+leadSchema.index({ projectId: 1, visitorId: 1 });
 
 export const Lead: Model<LeadDocument> = mongoose.model<LeadDocument>('Lead', leadSchema);

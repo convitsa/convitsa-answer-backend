@@ -93,6 +93,7 @@ export async function handleChatMessage(
         await LeadService.createLead({
           projectId: new Types.ObjectId(projectId),
           sessionId: new Types.ObjectId(sessionId),
+          visitorId: ws.visitorId,
           email: contactInfo.email,
           phone: contactInfo.phone,
           name: contactInfo.name,
@@ -101,7 +102,7 @@ export async function handleChatMessage(
             detectedFrom: 'chat_message',
           },
         });
-        console.log(`✅ Lead created from chat message`);
+        console.log(`✅ Lead created from chat message (visitor=${ws.visitorId})`);
       } catch (leadError) {
         console.error('Failed to create lead:', leadError);
         // Don't fail the chat if lead creation fails

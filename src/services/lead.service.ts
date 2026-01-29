@@ -1,8 +1,9 @@
 import { Types } from 'mongoose';
-import { Lead, ConversionEvent, Project } from '../db/schemas';
-import type { ILead, LeadStatus, LeadSource, MarketingConfig } from '../types';
+import { Lead, ConversionEvent, Project, ChatMessage, ChatSession } from '../db/schemas';
+import type { ILead, LeadStatus, LeadSource, MarketingConfig, IChatMessage } from '../types';
 import { EmailService } from './email.service';
 import { WebhookService } from './webhook.service';
+import { RAGService } from './rag.service';
 
 export interface ExtractedContactInfo {
   email?: string;
@@ -13,6 +14,7 @@ export interface ExtractedContactInfo {
 export interface LeadCreateInput {
   projectId: Types.ObjectId;
   sessionId?: Types.ObjectId;
+  visitorId?: string;
   email?: string;
   phone?: string;
   name?: string;
@@ -92,6 +94,22 @@ export class LeadService {
    * Create a new lead
    */
   static async createLead(input: LeadCreateInput): Promise<ILead> {
+    // Find all sessions for this visitor (if visitorId is provided)
+    let sessionIds: Types.ObjectId[] = [];
+    if (input.visitorId) {
+      const visitorSessions = await ChatSession.find({
+        projectId: input.projectId,
+        visitorId: input.visitorId,
+      })
+        .select('_id')
+        .sort({ startedAt: 1 })
+        .lean();
+      sessionIds = visitorSessions.map((s) => s._id as Types.ObjectId);
+    } else if (input.sessionId) {
+      // Fallback to single session if no visitorId
+      sessionIds = [input.sessionId];
+    }
+
     // Check if lead with same email already exists for this project
     if (input.email) {
       const existing = await Lead.findOne({
@@ -104,15 +122,49 @@ export class LeadService {
         if (input.phone && !existing.phone) existing.phone = input.phone;
         if (input.name && !existing.name) existing.name = input.name;
         if (input.company && !existing.company) existing.company = input.company;
-        if (input.sessionId) existing.sessionId = input.sessionId;
+        if (input.visitorId && !existing.visitorId) existing.visitorId = input.visitorId;
+        
+        // Add new sessions to the array (avoid duplicates)
+        const existingSessionIdStrs = (existing.sessionIds || []).map((id) => id.toString());
+        for (const sessionId of sessionIds) {
+          if (!existingSessionIdStrs.includes(sessionId.toString())) {
+            existing.sessionIds.push(sessionId);
+          }
+        }
+        
+        // Generate AI summary if we have sessions and don't have one yet
+        if (sessionIds.length > 0 && !existing.conversationSummary) {
+          const aiSummary = await this.generateConversationSummary(sessionIds);
+          if (aiSummary) {
+            existing.conversationSummary = aiSummary.summary;
+            existing.intentScore = aiSummary.score;
+            existing.intentSignals = aiSummary.signals;
+          }
+        }
+        
         await existing.save();
         return existing.toObject() as ILead;
       }
     }
 
+    // Generate AI summary from all sessions
+    let conversationSummary: string | undefined;
+    let intentScore: number | undefined;
+    let intentSignals: string[] | undefined;
+    
+    if (sessionIds.length > 0) {
+      const aiSummary = await this.generateConversationSummary(sessionIds);
+      if (aiSummary) {
+        conversationSummary = aiSummary.summary;
+        intentScore = aiSummary.score;
+        intentSignals = aiSummary.signals;
+      }
+    }
+
     const lead = new Lead({
       projectId: input.projectId,
-      sessionId: input.sessionId,
+      visitorId: input.visitorId,
+      sessionIds,
       email: input.email,
       phone: input.phone,
       name: input.name,
@@ -121,11 +173,14 @@ export class LeadService {
       status: 'new',
       metadata: input.metadata || {},
       capturedAt: new Date(),
+      conversationSummary,
+      intentScore,
+      intentSignals,
     });
 
     await lead.save();
 
-    // Track conversion event
+    // Track conversion event (use the current session for the event)
     await ConversionEvent.create({
       projectId: input.projectId,
       sessionId: input.sessionId,
@@ -136,6 +191,7 @@ export class LeadService {
         phone: input.phone,
         name: input.name,
         source: input.source || 'chat',
+        totalSessions: sessionIds.length,
       },
     });
 
@@ -172,6 +228,39 @@ export class LeadService {
     }
 
     return lead.toObject() as ILead;
+  }
+  
+  /**
+   * Generate AI summary for conversation across multiple sessions
+   */
+  private static async generateConversationSummary(
+    sessionIds: Types.ObjectId[]
+  ): Promise<{ summary: string; score: number; signals: string[] } | null> {
+    try {
+      // Fetch messages from all sessions
+      const messages = await ChatMessage.find({
+        sessionId: { $in: sessionIds },
+      })
+        .sort({ createdAt: 1 })
+        .lean() as IChatMessage[];
+      
+      // Need at least 2 messages for a meaningful summary
+      if (messages.length < 2) {
+        return null;
+      }
+      
+      // Use RAGService to analyze the full conversation history
+      const intentResult = await RAGService.scoreSessionIntent(messages);
+      
+      return {
+        summary: intentResult.summary,
+        score: intentResult.score,
+        signals: intentResult.signals,
+      };
+    } catch (error) {
+      console.error('Error generating conversation summary:', error);
+      return null;
+    }
   }
 
   /**
