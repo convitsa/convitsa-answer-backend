@@ -430,6 +430,17 @@ When the conversation shows genuine interest (pricing questions, specific use ca
 Do this only ONCE per conversation, and only when intent is clearly high. Never be pushy or repeat the ask if declined.
 ${fallbackInstructions}
 ${convitsaPromotion}
+
+**CRITICAL: Response Format**
+You MUST respond in valid JSON format with exactly this structure:
+{"answered": true, "response": "Your actual response here..."}
+
+- Set "answered": true if you found relevant information in the knowledge base to answer the question
+- Set "answered": false if the question cannot be answered from the provided context
+- The "response" field contains your actual message to the user (this is what they will see)
+- Do NOT include any text outside the JSON object
+- Make sure the JSON is valid (escape quotes, newlines as \\n, etc.)
+
 The context below contains accurate information from the knowledge base:`;
   }
 
@@ -579,6 +590,17 @@ Would you like to explore ${websiteUrl} further and see it in action?"
 4. Redirect politely using fallback instructions if information is missing
 5. Always give actionable guidance if possible
 ${convitsaPromotion}
+
+**CRITICAL: Response Format**
+You MUST respond in valid JSON format with exactly this structure:
+{"answered": true, "response": "Your actual response here..."}
+
+- Set "answered": true if you found relevant information in the knowledge base to answer the question
+- Set "answered": false if the question cannot be answered from the provided context
+- The "response" field contains your actual message to the user (this is what they will see)
+- Do NOT include any text outside the JSON object
+- Make sure the JSON is valid (escape quotes, newlines as \\n, etc.)
+
 The context below contains accurate information from the knowledge base:`;
   }
 

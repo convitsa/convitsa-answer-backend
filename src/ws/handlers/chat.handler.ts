@@ -121,17 +121,14 @@ export async function handleChatMessage(
     // Build system prompt and messages (pass marketing config)
     const systemPrompt = RAGService.buildSystemPrompt(websiteUrl, tier as ChatTier, marketingConfig);
     const messages = RAGService.buildMessages(systemPrompt, contextText, content, history);
-    
-    // Check if this might be an unanswered question (no context found)
-    const mightBeUnanswered = contexts.length === 0;
 
-    // Stream the response
+    // Buffer the response (AI returns JSON format)
     let fullResponse = '';
 
     await ChatService.streamCompletion(messages, tier, {
       onChunk: (chunk) => {
+        // Buffer chunks - don't send raw JSON to user
         fullResponse += chunk;
-        sendChunk(ws, chunk);
       },
       onDone: async (usage) => {
         // Use actual token counts from Azure OpenAI
@@ -139,21 +136,45 @@ export async function handleChatMessage(
         
         console.log(`📊 Token usage - Prompt: ${promptTokens}, Completion: ${completionTokens}, Total: ${totalTokens}`);
 
+        // Parse the JSON response from AI
+        let actualResponse = fullResponse;
+        let wasAnswered = true; // Assume answered unless AI explicitly says no
+        
+        try {
+          // Try to parse as JSON
+          const jsonResponse = JSON.parse(fullResponse);
+          if (jsonResponse && typeof jsonResponse.response === 'string') {
+            actualResponse = jsonResponse.response;
+            wasAnswered = jsonResponse.answered !== false; // true unless explicitly false
+            console.log(`📋 AI response parsed - answered: ${wasAnswered}`);
+          }
+        } catch {
+          // If not valid JSON, use the raw response (backwards compatibility)
+          console.log('⚠️ AI response was not valid JSON, using raw response');
+        }
+
+        // Send the actual response to user (stream it for natural feel)
+        const chunkSize = 10; // Characters per chunk for streaming effect
+        for (let i = 0; i < actualResponse.length; i += chunkSize) {
+          const chunk = actualResponse.slice(i, i + chunkSize);
+          sendChunk(ws, chunk);
+        }
+
         // Save user message with actual prompt tokens (includes context)
         await ChatMessage.create({
           sessionId: ws.sessionId,
           role: 'user',
           content,
-          tokenCount: promptTokens, // Actual tokens from Azure
+          tokenCount: promptTokens,
           createdAt: new Date(),
         });
 
-        // Save assistant message with actual completion tokens
+        // Save assistant message with actual completion tokens (save the actual response, not JSON)
         await ChatMessage.create({
           sessionId: ws.sessionId,
           role: 'assistant',
-          content: fullResponse,
-          tokenCount: completionTokens, // Actual tokens from Azure
+          content: actualResponse,
+          tokenCount: completionTokens,
           createdAt: new Date(),
         });
 
@@ -163,14 +184,14 @@ export async function handleChatMessage(
           {
             $inc: {
               totalTokens: totalTokens,
-              messageCount: 2, // user + assistant
+              messageCount: 2,
             },
           }
         );
 
-        // Update conversation history
+        // Update conversation history (with actual response, not JSON)
         history.push({ role: 'user', content });
-        history.push({ role: 'assistant', content: fullResponse });
+        history.push({ role: 'assistant', content: actualResponse });
 
         // Keep only last 20 messages in history
         if (history.length > 20) {
@@ -183,13 +204,13 @@ export async function handleChatMessage(
           await SubscriptionService.deductTokens(userId, totalTokens, sessionId, 'Chat completion');
         }
 
-        // Track unanswered questions if AI couldn't answer
-        if (mightBeUnanswered || UnansweredQuestionService.isUnansweredResponse(fullResponse)) {
+        // Track unanswered questions based on AI's own assessment
+        if (!wasAnswered) {
           try {
             await UnansweredQuestionService.trackQuestion(
               new Types.ObjectId(projectId),
               content,
-              fullResponse,
+              actualResponse,
               new Types.ObjectId(sessionId)
             );
             console.log(`📝 Tracked unanswered question: "${content.slice(0, 50)}..."`);
