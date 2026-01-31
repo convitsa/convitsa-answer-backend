@@ -244,8 +244,18 @@ webhooks.get('/gumroad/test', (c) => {
  * Dodo Payments product ID to tier mapping
  */
 function getTierFromProductId(productId: string): SubscriptionTier {
-  if (productId === env.DODO_PRO_PRODUCT_ID) return 'pro';
-  if (productId === env.DODO_BUSINESS_PRODUCT_ID) return 'business';
+  console.log(`🔍 Mapping product ID to tier: productId=${productId}, PRO_ID=${env.DODO_PRO_PRODUCT_ID}, BUSINESS_ID=${env.DODO_BUSINESS_PRODUCT_ID}`);
+  
+  if (productId === env.DODO_PRO_PRODUCT_ID) {
+    console.log(`✅ Matched PRO tier`);
+    return 'pro';
+  }
+  if (productId === env.DODO_BUSINESS_PRODUCT_ID) {
+    console.log(`✅ Matched BUSINESS tier`);
+    return 'business';
+  }
+  
+  console.log(`⚠️ No tier matched for product ID ${productId}, defaulting to free`);
   return 'free';
 }
 
@@ -395,15 +405,21 @@ webhooks.post('/dodo', async (c) => {
         const plan = getSubscriptionPlan(tier);
         const periodEnd = nextBillingDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
         
+        console.log(`📋 Processing subscription.active: tier=${tier}, productId=${productId}, userId=${userId}`);
+        
         // Check if this is a reactivation by looking for existing subscription
         const existingSub = await Subscription.findOne({ userId: user._id }).lean();
         const isReactivation = existingSub && existingSub.status !== 'active';
+        
+        if (existingSub) {
+          console.log(`📋 Existing subscription: tier=${existingSub.tier}, dodoSubId=${existingSub.dodoSubscriptionId}`);
+        }
 
         // Cancel any old Dodo subscriptions before creating the new one
         // This prevents duplicate billing when switching plans
         await SubscriptionService.cancelOldDodoSubscriptions(userId, subscriptionId);
 
-        await SubscriptionService.createSubscription(userId, {
+        const result = await SubscriptionService.createSubscription(userId, {
           tier,
           dodoCustomerId: customerId,
           dodoSubscriptionId: subscriptionId,
@@ -411,6 +427,8 @@ webhooks.post('/dodo', async (c) => {
           currentPeriodEnd: periodEnd,
           bonusTokens: 0,
         });
+        
+        console.log(`📋 createSubscription result: success=${result.success}, newTier=${result.data?.tier}`);
 
         console.log(`✅ Subscription ${isReactivation ? 'reactivated' : 'created'} for ${resolvedEmail}: ${tier}`);
         
@@ -521,6 +539,12 @@ webhooks.post('/dodo', async (c) => {
         // Payment failed - subscription on hold
         const holdSub = await Subscription.findOne({ userId: user._id }).lean();
         
+        // Only process if this is the current subscription
+        if (holdSub?.dodoSubscriptionId && holdSub.dodoSubscriptionId !== subscriptionId) {
+          console.log(`⏭️ Ignoring on_hold for old subscription ${subscriptionId}, current is ${holdSub.dodoSubscriptionId}`);
+          break;
+        }
+        
         await SubscriptionService.updateSubscription(userId, {
           status: 'on_hold',
         });
@@ -538,6 +562,14 @@ webhooks.post('/dodo', async (c) => {
       case 'subscription.cancelled': {
         // User cancelled - may end immediately or at period end
         const currentSub = await Subscription.findOne({ userId: user._id }).lean();
+        
+        // IMPORTANT: Only process cancellation if this is the current subscription
+        // This prevents old cancelled subscriptions from overwriting new ones
+        if (currentSub?.dodoSubscriptionId && currentSub.dodoSubscriptionId !== subscriptionId) {
+          console.log(`⏭️ Ignoring cancellation for old subscription ${subscriptionId}, current is ${currentSub.dodoSubscriptionId}`);
+          break;
+        }
+        
         const accessEnds = expiresAt || nextBillingDate || currentSub?.currentPeriodEnd || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
         
         await SubscriptionService.updateSubscription(userId, {
@@ -560,6 +592,14 @@ webhooks.post('/dodo', async (c) => {
 
       case 'subscription.expired': {
         // Subscription ended - downgrade to free
+        const expiredSub = await Subscription.findOne({ userId: user._id }).lean();
+        
+        // Only process if this is the current subscription
+        if (expiredSub?.dodoSubscriptionId && expiredSub.dodoSubscriptionId !== subscriptionId) {
+          console.log(`⏭️ Ignoring expired for old subscription ${subscriptionId}, current is ${expiredSub.dodoSubscriptionId}`);
+          break;
+        }
+        
         const freePlan = getSubscriptionPlan('free');
         
         await SubscriptionService.updateSubscription(userId, {
