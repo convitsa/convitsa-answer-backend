@@ -1,8 +1,15 @@
 import { Types } from 'mongoose';
+import DodoPayments from 'dodopayments';
 import { Subscription, User, Project } from '../db/schemas';
 import { getSubscriptionPlan, env, openAIToConvitsaTokens } from '../config/env';
 import { EmailService } from './email.service';
 import type { ISubscription, SubscriptionTier, SubscriptionStatus, ServiceResult } from '../types';
+
+// Initialize Dodo Payments client for subscription management
+const dodoClient = new DodoPayments({
+  bearerToken: env.DODO_PAYMENTS_API_KEY,
+  environment: env.DODO_PAYMENTS_ENVIRONMENT as 'test_mode' | 'live_mode',
+});
 
 // Low tokens warning threshold (% of limit)
 const LOW_TOKENS_THRESHOLD_PERCENT = 10;
@@ -223,6 +230,46 @@ export class SubscriptionService {
    */
   static async cancelSubscription(userId: string): Promise<ServiceResult<ISubscription>> {
     return this.updateSubscription(userId, { cancelAtPeriodEnd: true });
+  }
+
+  /**
+   * Cancel old Dodo subscriptions when user switches to a new plan
+   * This is called before creating a new subscription to avoid duplicate billing
+   */
+  static async cancelOldDodoSubscriptions(
+    userId: string,
+    newSubscriptionId: string
+  ): Promise<void> {
+    try {
+      // Find existing subscription for this user
+      const existingSub = await Subscription.findOne({
+        userId: new Types.ObjectId(userId),
+      }).lean();
+
+      // If there's an existing Dodo subscription that's different from the new one, cancel it
+      if (
+        existingSub?.dodoSubscriptionId &&
+        existingSub.dodoSubscriptionId !== newSubscriptionId &&
+        existingSub.status === 'active'
+      ) {
+        console.log(`🔄 Cancelling old Dodo subscription ${existingSub.dodoSubscriptionId} for user ${userId}`);
+        
+        try {
+          // Cancel immediately in Dodo Payments (not at period end)
+          await dodoClient.subscriptions.update(existingSub.dodoSubscriptionId, {
+            status: 'cancelled',
+          } as any);
+          
+          console.log(`✅ Successfully cancelled old subscription ${existingSub.dodoSubscriptionId}`);
+        } catch (cancelError) {
+          // Log but don't fail - the subscription might already be cancelled
+          console.error(`⚠️ Failed to cancel old subscription ${existingSub.dodoSubscriptionId}:`, cancelError);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking for old subscriptions:', error);
+      // Don't throw - we still want to create the new subscription
+    }
   }
 
   /**

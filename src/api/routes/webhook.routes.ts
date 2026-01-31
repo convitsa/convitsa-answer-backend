@@ -399,6 +399,10 @@ webhooks.post('/dodo', async (c) => {
         const existingSub = await Subscription.findOne({ userId: user._id }).lean();
         const isReactivation = existingSub && existingSub.status !== 'active';
 
+        // Cancel any old Dodo subscriptions before creating the new one
+        // This prevents duplicate billing when switching plans
+        await SubscriptionService.cancelOldDodoSubscriptions(userId, subscriptionId);
+
         await SubscriptionService.createSubscription(userId, {
           tier,
           dodoCustomerId: customerId,
