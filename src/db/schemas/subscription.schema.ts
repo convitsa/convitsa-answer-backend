@@ -1,5 +1,5 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
-import type { ISubscription, SubscriptionTier, SubscriptionStatus } from '../../types';
+import type { ISubscription, SubscriptionTier, SubscriptionStatus, BillingInterval } from '../../types';
 
 export interface SubscriptionDocument extends Omit<ISubscription, '_id'>, Document {}
 
@@ -23,16 +23,21 @@ const subscriptionSchema = new Schema<SubscriptionDocument>(
       default: 'active',
       required: true,
     },
-    // Dodo Payments fields
-    dodoCustomerId: {
+    billingInterval: {
+      type: String,
+      enum: ['monthly', 'yearly'] as BillingInterval[],
+      default: 'monthly',
+    },
+    // Stripe fields
+    stripeCustomerId: {
       type: String,
       trim: true,
     },
-    dodoSubscriptionId: {
+    stripeSubscriptionId: {
       type: String,
       trim: true,
     },
-    dodoProductId: {
+    stripePriceId: {
       type: String,
       trim: true,
     },
@@ -81,8 +86,8 @@ const subscriptionSchema = new Schema<SubscriptionDocument>(
 );
 
 // Indexes
-subscriptionSchema.index({ dodoCustomerId: 1 }, { sparse: true });
-subscriptionSchema.index({ dodoSubscriptionId: 1 }, { sparse: true });
+subscriptionSchema.index({ stripeCustomerId: 1 }, { sparse: true });
+subscriptionSchema.index({ stripeSubscriptionId: 1 }, { sparse: true });
 subscriptionSchema.index({ status: 1 });
 subscriptionSchema.index({ tier: 1 });
 subscriptionSchema.index({ currentPeriodEnd: 1 });

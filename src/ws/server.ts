@@ -94,7 +94,7 @@ export function createWebSocketServer(server: Server): WebSocketServer {
 
     const tier: ChatTier = subscription.tier as ChatTier;
 
-    console.log(`🎫 User ${userId} subscription: tier=${tier}, status=${subscription.status}, dodoSubId=${subscription.dodoSubscriptionId || 'none'}`);
+    console.log(`🎫 User ${userId} subscription: tier=${tier}, status=${subscription.status}, stripeSubId=${subscription.stripeSubscriptionId || 'none'}`);
 
     // Check connection limit
     if (connectionCount >= env.MAX_WS_CONNECTIONS_PER_KEY) {

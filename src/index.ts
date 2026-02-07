@@ -222,7 +222,7 @@ async function startServer() {
           }
           
           const tier: ChatTier = subscription.tier as ChatTier;
-          console.log(`🎫 User ${userId} subscription: tier=${tier}, status=${subscription.status}, dodoSubId=${subscription.dodoSubscriptionId || 'none'}`);
+          console.log(`🎫 User ${userId} subscription: tier=${tier}, status=${subscription.status}, stripeSubId=${subscription.stripeSubscriptionId || 'none'}`);
           
           // Run parallel operations for better performance
           const [connectionCount, project] = await Promise.all([

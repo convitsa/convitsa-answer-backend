@@ -1,10 +1,13 @@
 import { Hono } from 'hono';
 import bcrypt from 'bcrypt';
-import { Webhook } from 'standardwebhooks';
+import Stripe from 'stripe';
 import { User, CreditBalance, CreditTransaction, Subscription } from '../../db/schemas';
-import { env, getSubscriptionPlan } from '../../config/env';
+import { env, getSubscriptionPlan, getTierFromPriceId } from '../../config/env';
 import { EmailService, SubscriptionService } from '../../services';
-import type { SubscriptionTier } from '../../types';
+import type { SubscriptionTier, BillingInterval } from '../../types';
+
+// Initialize Stripe client
+const stripe = new Stripe(env.STRIPE_SECRET_KEY);
 
 /**
  * Generate a simple, easy-to-type random password
@@ -237,371 +240,316 @@ webhooks.get('/gumroad/test', (c) => {
 });
 
 // ============================================================
-// DODO PAYMENTS WEBHOOKS
+// STRIPE WEBHOOKS
 // ============================================================
 
 /**
- * Dodo Payments product ID to tier mapping
- */
-function getTierFromProductId(productId: string): SubscriptionTier {
-  console.log(`🔍 Mapping product ID to tier: productId=${productId}, PRO_ID=${env.DODO_PRO_PRODUCT_ID}, BUSINESS_ID=${env.DODO_BUSINESS_PRODUCT_ID}`);
-  
-  if (productId === env.DODO_PRO_PRODUCT_ID) {
-    console.log(`✅ Matched PRO tier`);
-    return 'pro';
-  }
-  if (productId === env.DODO_BUSINESS_PRODUCT_ID) {
-    console.log(`✅ Matched BUSINESS tier`);
-    return 'business';
-  }
-  
-  console.log(`⚠️ No tier matched for product ID ${productId}, defaulting to free`);
-  return 'free';
-}
-
-// Initialize Standard Webhooks verifier
-const webhookVerifier = new Webhook(env.DODO_PAYMENTS_WEBHOOK_KEY);
-
-/**
- * Dodo Payments subscription webhook payload type
- */
-interface DodoSubscriptionPayload {
-  subscription_id: string;
-  product_id: string;
-  status: 'pending' | 'active' | 'on_hold' | 'cancelled' | 'failed' | 'expired';
-  customer: {
-    customer_id: string;
-    email: string;
-    name: string;
-    metadata?: Record<string, any>;
-  };
-  metadata?: Record<string, any>;
-  next_billing_date: string;
-  previous_billing_date?: string;
-  cancel_at_next_billing_date: boolean;
-  quantity: number;
-  recurring_pre_tax_amount: number;
-  currency: string;
-  created_at: string;
-  cancelled_at?: string;
-  expires_at?: string;
-}
-
-interface DodoWebhookPayload {
-  type: string;
-  data: DodoSubscriptionPayload;
-}
-
-/**
- * POST /webhooks/dodo
- * Handle Dodo Payments subscription webhooks
+ * POST /webhooks/stripe
+ * Handle Stripe subscription webhooks
  * 
  * Events:
- * - subscription.active: New subscription activated or reactivated
- * - subscription.updated: Subscription updated (any field change)
- * - subscription.on_hold: Payment failed, subscription on hold
- * - subscription.renewed: Subscription renewed for next period
- * - subscription.plan_changed: Plan upgraded/downgraded
- * - subscription.cancelled: Subscription cancelled
- * - subscription.failed: Subscription creation failed
- * - subscription.expired: Subscription expired
+ * - checkout.session.completed: New subscription checkout completed
+ * - customer.subscription.created: Subscription created
+ * - customer.subscription.updated: Subscription updated (plan change, cancel, etc.)
+ * - customer.subscription.deleted: Subscription cancelled/expired
+ * - invoice.paid: Payment successful (for renewals)
+ * - invoice.payment_failed: Payment failed
  */
-webhooks.post('/dodo', async (c) => {
+webhooks.post('/stripe', async (c) => {
   try {
     // Get raw body for signature verification
     const rawBody = await c.req.text();
     
-    // Get Standard Webhooks headers
-    const webhookHeaders = {
-      'webhook-id': c.req.header('webhook-id') || '',
-      'webhook-signature': c.req.header('webhook-signature') || '',
-      'webhook-timestamp': c.req.header('webhook-timestamp') || '',
-    };
+    // Get Stripe signature header
+    const sig = c.req.header('stripe-signature');
+    if (!sig) {
+      console.error('❌ Stripe webhook: Missing signature');
+      return c.json({ error: 'Missing signature' }, 401);
+    }
 
-    // Verify webhook signature using Standard Webhooks
+    // Verify webhook signature
+    let event: Stripe.Event;
     try {
-      webhookVerifier.verify(rawBody, webhookHeaders);
-    } catch (verifyError) {
-      console.error('❌ Dodo Payments webhook: Invalid signature', verifyError);
+      event = stripe.webhooks.constructEvent(rawBody, sig, env.STRIPE_WEBHOOK_SECRET);
+    } catch (err) {
+      console.error('❌ Stripe webhook: Invalid signature', err);
       return c.json({ error: 'Invalid signature' }, 401);
     }
 
-    // Parse webhook payload
-    const payload: DodoWebhookPayload = JSON.parse(rawBody);
-    const { type: eventType, data: subscription } = payload;
+    console.log(`🔷 Stripe webhook: ${event.type}`);
 
-    // Get customer info
-    const customer = subscription.customer;
-    const customerId = customer.customer_id;
-    const customerEmail = customer.email?.toLowerCase().trim();
-    
-    // Get custom metadata (user_id passed during checkout)
-    const metadata = subscription.metadata || {};
-    const customUserId = metadata.user_id;
-
-    console.log(`🔷 Dodo Payments webhook: ${eventType}`, {
-      subscriptionId: subscription.subscription_id,
-      customerId,
-      customerEmail,
-      customUserId,
-      productId: subscription.product_id,
-      status: subscription.status,
-    });
-
-    // Find user - prefer user_id from metadata over email
-    let user;
-    let isNewUser = false;
-    
-    if (customUserId) {
-      user = await User.findById(customUserId).lean();
-    }
-    
-    if (!user && customerEmail) {
-      user = await User.findOne({ email: customerEmail }).lean();
-    }
-    
-    // Create new user for affiliate/direct purchases on subscription.active
-    let generatedPassword: string | null = null;
-    
-    if (!user && customerEmail && eventType === 'subscription.active') {
-      console.log(`📝 Creating new user for payment: ${customerEmail}`);
-      
-      generatedPassword = generateSimplePassword();
-      const passwordHash = await bcrypt.hash(generatedPassword, 10);
-      
-      const newUser = await User.create({
-        email: customerEmail,
-        passwordHash,
-        emailVerified: true,
-        createdVia: 'payment',
-      });
-      
-      user = newUser.toObject();
-      isNewUser = true;
-      
-      console.log(`✅ New user created: ${customerEmail} (password generated)`);
-    }
-    
-    if (!user) {
-      console.error('❌ Dodo Payments webhook: No user found and cannot create one');
-      return c.json({ error: 'User not found' }, 404);
-    }
-
-    const userId = user._id.toString();
-    const resolvedEmail = user.email;
-
-    // Extract subscription details
-    const subscriptionId = subscription.subscription_id;
-    const productId = subscription.product_id;
-    const nextBillingDate = subscription.next_billing_date ? new Date(subscription.next_billing_date) : null;
-    const expiresAt = subscription.expires_at ? new Date(subscription.expires_at) : null;
-
-    // Determine tier from product ID
-    const tier = getTierFromProductId(productId);
-
-    switch (eventType) {
-      case 'subscription.active': {
-        // New subscription activated or reactivated
-        const plan = getSubscriptionPlan(tier);
-        const periodEnd = nextBillingDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object as Stripe.Checkout.Session;
         
-        console.log(`📋 Processing subscription.active: tier=${tier}, productId=${productId}, userId=${userId}`);
-        
-        // Check if this is a reactivation by looking for existing subscription
-        const existingSub = await Subscription.findOne({ userId: user._id }).lean();
-        const isReactivation = existingSub && existingSub.status !== 'active';
-        
-        if (existingSub) {
-          console.log(`📋 Existing subscription: tier=${existingSub.tier}, dodoSubId=${existingSub.dodoSubscriptionId}`);
+        if (session.mode !== 'subscription') {
+          console.log('⏭️ Ignoring non-subscription checkout');
+          break;
         }
 
-        // Cancel any old Dodo subscriptions before creating the new one
-        // This prevents duplicate billing when switching plans
-        await SubscriptionService.cancelOldDodoSubscriptions(userId, subscriptionId);
+        const customerId = session.customer as string;
+        const subscriptionId = session.subscription as string;
+        const customerEmail = session.customer_email?.toLowerCase().trim() || session.customer_details?.email?.toLowerCase().trim();
+        const metadata = session.metadata || {};
+        const customUserId = metadata.user_id;
 
-        const result = await SubscriptionService.createSubscription(userId, {
-          tier,
-          dodoCustomerId: customerId,
-          dodoSubscriptionId: subscriptionId,
-          dodoProductId: productId,
-          currentPeriodEnd: periodEnd,
-          bonusTokens: 0,
+        console.log(`📋 Checkout completed:`, {
+          customerId,
+          subscriptionId,
+          customerEmail,
+          customUserId,
         });
-        
-        console.log(`📋 createSubscription result: success=${result.success}, newTier=${result.data?.tier}`);
 
-        console.log(`✅ Subscription ${isReactivation ? 'reactivated' : 'created'} for ${resolvedEmail}: ${tier}`);
+        // Find user - prefer user_id from metadata over email
+        let user;
+        let isNewUser = false;
+        let generatedPassword: string | null = null;
+
+        if (customUserId) {
+          user = await User.findById(customUserId).lean();
+        }
         
+        if (!user && customerEmail) {
+          user = await User.findOne({ email: customerEmail }).lean();
+        }
+
+        // Create new user for affiliate/direct purchases
+        if (!user && customerEmail) {
+          console.log(`📝 Creating new user for payment: ${customerEmail}`);
+          
+          generatedPassword = generateSimplePassword();
+          const passwordHash = await bcrypt.hash(generatedPassword, 10);
+          
+          const newUser = await User.create({
+            email: customerEmail,
+            passwordHash,
+            emailVerified: true,
+            createdVia: 'payment',
+          });
+          
+          user = newUser.toObject();
+          isNewUser = true;
+          
+          // Create free subscription first (will be upgraded by subscription.created event)
+          await SubscriptionService.createFreeSubscription(user._id.toString());
+          
+          console.log(`✅ New user created: ${customerEmail}`);
+        }
+
+        if (!user) {
+          console.error('❌ Stripe webhook: No user found');
+          return c.json({ error: 'User not found' }, 404);
+        }
+
+        // Store the generated password for use in subscription.created
         if (isNewUser && generatedPassword) {
-          EmailService.sendPaymentWelcomeEmail(
-            resolvedEmail,
-            generatedPassword,
-            plan.name,
-            0
-          ).catch((err) => {
-            console.error('Failed to send payment welcome email:', err);
-          });
-        } else if (isReactivation) {
-          EmailService.sendSubscriptionReactivatedEmail(resolvedEmail, plan.name).catch((err) => {
-            console.error('Failed to send subscription reactivated email:', err);
-          });
-        } else {
-          EmailService.sendSubscriptionStartedEmail(
-            resolvedEmail,
-            plan.name,
-            plan.price,
-            plan.tokensPerMonth,
-            periodEnd
-          ).catch((err) => {
-            console.error('Failed to send subscription started email:', err);
-          });
-        }
-        break;
-      }
-
-      case 'subscription.renewed': {
-        // Subscription renewed - reset monthly usage
-        const periodEnd = nextBillingDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-        await SubscriptionService.updateSubscription(userId, {
-          status: 'active',
-          currentPeriodStart: new Date(),
-          currentPeriodEnd: periodEnd,
-        });
-
-        // Reset monthly tokens
-        const renewedSub = await Subscription.findOneAndUpdate(
-          { userId: user._id },
-          { $set: { tokensUsedThisMonth: 0 } },
-          { new: true }
-        ).lean();
-
-        console.log(`💳 Subscription renewed for ${resolvedEmail}, usage reset`);
-        
-        if (renewedSub) {
-          const renewPlan = getSubscriptionPlan(renewedSub.tier as SubscriptionTier);
-          EmailService.sendSubscriptionRenewedEmail(
-            resolvedEmail,
-            renewPlan.name,
-            renewPlan.tokensPerMonth,
-            periodEnd
-          ).catch((err) => {
-            console.error('Failed to send subscription renewed email:', err);
-          });
-        }
-        break;
-      }
-
-      case 'subscription.updated': {
-        // Subscription updated (could be various changes)
-        const updatedTier = getTierFromProductId(productId);
-        const periodEnd = nextBillingDate || expiresAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-        await SubscriptionService.updateSubscription(userId, {
-          tier: updatedTier,
-          dodoProductId: productId,
-          currentPeriodEnd: periodEnd,
-          cancelAtPeriodEnd: subscription.cancel_at_next_billing_date,
-        });
-
-        console.log(`✅ Subscription updated for ${resolvedEmail}: ${updatedTier}`);
-        break;
-      }
-
-      case 'subscription.plan_changed': {
-        // Plan upgrade/downgrade
-        const newTier = getTierFromProductId(productId);
-        const plan = getSubscriptionPlan(newTier);
-        const periodEnd = nextBillingDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-        await SubscriptionService.updateSubscription(userId, {
-          tier: newTier,
-          dodoProductId: productId,
-          currentPeriodEnd: periodEnd,
-        });
-
-        // Update token and project limits
-        await Subscription.findOneAndUpdate(
-          { userId: user._id },
-          {
-            $set: {
-              tokensLimit: plan.tokensPerMonth,
-              projectsLimit: plan.projectsLimit,
-            },
+          // Store temporarily in metadata for the subscription event
+          try {
+            await stripe.subscriptions.update(subscriptionId, {
+              metadata: {
+                ...metadata,
+                is_new_user: 'true',
+                temp_password: generatedPassword,
+              },
+            });
+          } catch (err) {
+            console.error('Failed to update subscription metadata:', err);
           }
-        );
-
-        console.log(`✅ Plan changed for ${resolvedEmail}: ${newTier}`);
+        }
+        
         break;
       }
 
-      case 'subscription.on_hold': {
-        // Payment failed - subscription on hold
-        const holdSub = await Subscription.findOne({ userId: user._id }).lean();
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId = subscription.customer as string;
+        const subscriptionId = subscription.id;
+        const priceId = subscription.items.data[0]?.price.id;
+        const metadata = subscription.metadata || {};
+        const customUserId = metadata.user_id;
+        const isNewUser = metadata.is_new_user === 'true';
+        const generatedPassword = metadata.temp_password;
+
+        console.log(`📋 Subscription ${event.type}:`, {
+          subscriptionId,
+          customerId,
+          priceId,
+          status: subscription.status,
+          cancelAtPeriodEnd: subscription.cancel_at_period_end,
+        });
+
+        // Get tier and billing interval from price ID
+        const { tier, billingInterval } = getTierFromPriceId(priceId || '');
         
-        // Only process if this is the current subscription
-        if (holdSub?.dodoSubscriptionId && holdSub.dodoSubscriptionId !== subscriptionId) {
-          console.log(`⏭️ Ignoring on_hold for old subscription ${subscriptionId}, current is ${holdSub.dodoSubscriptionId}`);
+        if (tier === 'free') {
+          console.log('⏭️ Free tier, skipping subscription update');
           break;
         }
+
+        // Find user
+        let user;
+        if (customUserId) {
+          user = await User.findById(customUserId).lean();
+        }
         
-        await SubscriptionService.updateSubscription(userId, {
-          status: 'on_hold',
-        });
+        if (!user) {
+          // Try to find by Stripe customer ID
+          const existingSub = await SubscriptionService.findByStripeCustomerId(customerId);
+          if (existingSub) {
+            user = await User.findById(existingSub.userId).lean();
+          }
+        }
 
-        console.log(`❌ Subscription on hold for ${resolvedEmail} (payment failed)`);
+        if (!user) {
+          // Try to get email from Stripe customer
+          try {
+            const customer = await stripe.customers.retrieve(customerId);
+            if (customer && !customer.deleted && customer.email) {
+              user = await User.findOne({ email: customer.email.toLowerCase().trim() }).lean();
+            }
+          } catch (err) {
+            console.error('Failed to retrieve Stripe customer:', err);
+          }
+        }
 
-        const holdPlan = getSubscriptionPlan(holdSub?.tier as SubscriptionTier || tier);
-        const retryDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
-        EmailService.sendPaymentFailedEmail(resolvedEmail, holdPlan.name, retryDate).catch((err) => {
-          console.error('Failed to send payment failed email:', err);
-        });
+        if (!user) {
+          console.error('❌ Stripe webhook: No user found for subscription');
+          return c.json({ error: 'User not found' }, 404);
+        }
+
+        const userId = user._id.toString();
+        const resolvedEmail = user.email;
+
+        // Calculate period end
+        const periodEnd = new Date(subscription.current_period_end * 1000);
+        const periodStart = new Date(subscription.current_period_start * 1000);
+
+        // Check if this is a reactivation
+        const existingSub = await Subscription.findOne({ userId: user._id }).lean();
+        const isReactivation = existingSub && existingSub.status !== 'active' && subscription.status === 'active';
+
+        // Cancel old subscriptions when switching plans
+        if (existingSub?.stripeSubscriptionId && existingSub.stripeSubscriptionId !== subscriptionId) {
+          await SubscriptionService.cancelOldStripeSubscriptions(userId, subscriptionId);
+        }
+
+        // Handle different subscription statuses
+        if (subscription.status === 'active') {
+          const plan = getSubscriptionPlan(tier);
+
+          await SubscriptionService.createSubscription(userId, {
+            tier,
+            billingInterval,
+            stripeCustomerId: customerId,
+            stripeSubscriptionId: subscriptionId,
+            stripePriceId: priceId,
+            currentPeriodEnd: periodEnd,
+            bonusTokens: 0,
+          });
+
+          // Update period start
+          await Subscription.findOneAndUpdate(
+            { userId: user._id },
+            { $set: { currentPeriodStart: periodStart } }
+          );
+
+          console.log(`✅ Subscription active for ${resolvedEmail}: ${tier} (${billingInterval})`);
+
+          // Send appropriate email
+          const displayPrice = billingInterval === 'yearly' ? plan.yearlyPrice : plan.price;
+          
+          if (isNewUser && generatedPassword) {
+            EmailService.sendPaymentWelcomeEmail(
+              resolvedEmail,
+              generatedPassword,
+              `${plan.name} (${billingInterval === 'yearly' ? 'Yearly' : 'Monthly'})`,
+              0
+            ).catch((err) => {
+              console.error('Failed to send payment welcome email:', err);
+            });
+            
+            // Clear temp password from metadata
+            try {
+              await stripe.subscriptions.update(subscriptionId, {
+                metadata: { ...metadata, temp_password: null, is_new_user: null },
+              });
+            } catch (err) {
+              console.error('Failed to clear temp metadata:', err);
+            }
+          } else if (isReactivation) {
+            EmailService.sendSubscriptionReactivatedEmail(resolvedEmail, plan.name).catch((err) => {
+              console.error('Failed to send subscription reactivated email:', err);
+            });
+          } else if (event.type === 'customer.subscription.created') {
+            EmailService.sendSubscriptionStartedEmail(
+              resolvedEmail,
+              `${plan.name} (${billingInterval === 'yearly' ? 'Yearly' : 'Monthly'})`,
+              displayPrice,
+              plan.tokensPerMonth,
+              periodEnd
+            ).catch((err) => {
+              console.error('Failed to send subscription started email:', err);
+            });
+          }
+        } else if (subscription.status === 'past_due') {
+          await SubscriptionService.updateSubscription(userId, {
+            status: 'on_hold',
+          });
+
+          console.log(`❌ Subscription past due for ${resolvedEmail}`);
+
+          const holdPlan = getSubscriptionPlan(tier);
+          const retryDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+          EmailService.sendPaymentFailedEmail(resolvedEmail, holdPlan.name, retryDate).catch((err) => {
+            console.error('Failed to send payment failed email:', err);
+          });
+        }
+
+        // Handle cancel_at_period_end changes
+        if (subscription.cancel_at_period_end) {
+          await SubscriptionService.updateSubscription(userId, {
+            cancelAtPeriodEnd: true,
+          });
+          console.log(`⚠️ Subscription scheduled for cancellation: ${resolvedEmail}`);
+        } else if (existingSub?.cancelAtPeriodEnd && !subscription.cancel_at_period_end) {
+          // Reactivated
+          await SubscriptionService.updateSubscription(userId, {
+            cancelAtPeriodEnd: false,
+            status: 'active',
+          });
+          console.log(`✅ Subscription reactivated: ${resolvedEmail}`);
+        }
+
         break;
       }
 
-      case 'subscription.cancelled': {
-        // User cancelled - may end immediately or at period end
-        const currentSub = await Subscription.findOne({ userId: user._id }).lean();
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const subscriptionId = subscription.id;
+        const customerId = subscription.customer as string;
+
+        console.log(`📋 Subscription deleted:`, { subscriptionId, customerId });
+
+        // Find user by subscription ID
+        const existingSub = await SubscriptionService.findByStripeSubscriptionId(subscriptionId);
         
-        // IMPORTANT: Only process cancellation if this is the current subscription
-        // This prevents old cancelled subscriptions from overwriting new ones
-        if (currentSub?.dodoSubscriptionId && currentSub.dodoSubscriptionId !== subscriptionId) {
-          console.log(`⏭️ Ignoring cancellation for old subscription ${subscriptionId}, current is ${currentSub.dodoSubscriptionId}`);
+        if (!existingSub) {
+          console.log('⏭️ No matching subscription found in database');
           break;
         }
-        
-        const accessEnds = expiresAt || nextBillingDate || currentSub?.currentPeriodEnd || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-        
-        await SubscriptionService.updateSubscription(userId, {
-          status: 'cancelled',
-          cancelAtPeriodEnd: subscription.cancel_at_next_billing_date,
-        });
 
-        console.log(`⚠️ Subscription cancelled for ${resolvedEmail}`);
-        
-        const cancelPlan = getSubscriptionPlan(currentSub?.tier || tier);
-        EmailService.sendSubscriptionCancelledEmail(
-          resolvedEmail,
-          cancelPlan.name,
-          accessEnds
-        ).catch((err) => {
-          console.error('Failed to send subscription cancelled email:', err);
-        });
-        break;
-      }
-
-      case 'subscription.expired': {
-        // Subscription ended - downgrade to free
-        const expiredSub = await Subscription.findOne({ userId: user._id }).lean();
-        
-        // Only process if this is the current subscription
-        if (expiredSub?.dodoSubscriptionId && expiredSub.dodoSubscriptionId !== subscriptionId) {
-          console.log(`⏭️ Ignoring expired for old subscription ${subscriptionId}, current is ${expiredSub.dodoSubscriptionId}`);
+        const user = await User.findById(existingSub.userId).lean();
+        if (!user) {
+          console.error('❌ User not found for deleted subscription');
           break;
         }
-        
+
+        const userId = user._id.toString();
+        const resolvedEmail = user.email;
         const freePlan = getSubscriptionPlan('free');
-        
+
+        // Downgrade to free tier
         await SubscriptionService.updateSubscription(userId, {
           tier: 'free',
           status: 'expired',
@@ -615,42 +563,147 @@ webhooks.post('/dodo', async (c) => {
               tokensLimit: freePlan.tokensPerMonth,
               projectsLimit: freePlan.projectsLimit,
               tokensUsedThisMonth: 0,
-              dodoSubscriptionId: null,
-              dodoProductId: null,
+              stripeSubscriptionId: null,
+              stripePriceId: null,
             },
           }
         );
 
         console.log(`⚠️ Subscription expired for ${resolvedEmail}, downgraded to free`);
+
+        // Send cancellation email
+        const cancelPlan = getSubscriptionPlan(existingSub.tier);
+        EmailService.sendSubscriptionCancelledEmail(
+          resolvedEmail,
+          cancelPlan.name,
+          new Date()
+        ).catch((err) => {
+          console.error('Failed to send subscription cancelled email:', err);
+        });
+
         break;
       }
 
-      case 'subscription.failed': {
-        // Subscription creation failed
-        console.log(`❌ Subscription creation failed for ${resolvedEmail}`);
+      case 'invoice.paid': {
+        const invoice = event.data.object as Stripe.Invoice;
+        
+        if (invoice.billing_reason !== 'subscription_cycle') {
+          console.log('⏭️ Not a renewal invoice, skipping');
+          break;
+        }
+
+        const subscriptionId = invoice.subscription as string;
+        const customerId = invoice.customer as string;
+
+        console.log(`📋 Invoice paid (renewal):`, { subscriptionId, customerId });
+
+        // Find user
+        const existingSub = await SubscriptionService.findByStripeSubscriptionId(subscriptionId);
+        
+        if (!existingSub) {
+          console.log('⏭️ No matching subscription found');
+          break;
+        }
+
+        const user = await User.findById(existingSub.userId).lean();
+        if (!user) {
+          console.error('❌ User not found for renewal');
+          break;
+        }
+
+        const userId = user._id.toString();
+        const resolvedEmail = user.email;
+
+        // Get subscription details from Stripe
+        const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+        const periodEnd = new Date(stripeSubscription.current_period_end * 1000);
+        const periodStart = new Date(stripeSubscription.current_period_start * 1000);
+
+        // Update subscription and reset usage
+        await SubscriptionService.updateSubscription(userId, {
+          status: 'active',
+          currentPeriodStart: periodStart,
+          currentPeriodEnd: periodEnd,
+        });
+
+        await Subscription.findOneAndUpdate(
+          { userId: user._id },
+          { $set: { tokensUsedThisMonth: 0 } }
+        );
+
+        console.log(`💳 Subscription renewed for ${resolvedEmail}, usage reset`);
+
+        const renewPlan = getSubscriptionPlan(existingSub.tier);
+        EmailService.sendSubscriptionRenewedEmail(
+          resolvedEmail,
+          renewPlan.name,
+          renewPlan.tokensPerMonth,
+          periodEnd
+        ).catch((err) => {
+          console.error('Failed to send subscription renewed email:', err);
+        });
+
+        break;
+      }
+
+      case 'invoice.payment_failed': {
+        const invoice = event.data.object as Stripe.Invoice;
+        const subscriptionId = invoice.subscription as string;
+
+        if (!subscriptionId) {
+          console.log('⏭️ No subscription on failed invoice');
+          break;
+        }
+
+        console.log(`📋 Invoice payment failed:`, { subscriptionId });
+
+        const existingSub = await SubscriptionService.findByStripeSubscriptionId(subscriptionId);
+        
+        if (!existingSub) {
+          console.log('⏭️ No matching subscription found');
+          break;
+        }
+
+        const user = await User.findById(existingSub.userId).lean();
+        if (!user) break;
+
+        const resolvedEmail = user.email;
+
+        await SubscriptionService.updateSubscription(user._id.toString(), {
+          status: 'on_hold',
+        });
+
+        console.log(`❌ Payment failed for ${resolvedEmail}`);
+
+        const holdPlan = getSubscriptionPlan(existingSub.tier);
+        const retryDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+        EmailService.sendPaymentFailedEmail(resolvedEmail, holdPlan.name, retryDate).catch((err) => {
+          console.error('Failed to send payment failed email:', err);
+        });
+
         break;
       }
 
       default:
-        console.log(`🔷 Unhandled Dodo Payments event: ${eventType}`);
+        console.log(`🔷 Unhandled Stripe event: ${event.type}`);
     }
 
-    return c.json({ success: true, event: eventType });
+    return c.json({ received: true });
 
   } catch (error) {
-    console.error('❌ Dodo Payments webhook error:', error);
+    console.error('❌ Stripe webhook error:', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
 
 /**
- * GET /webhooks/dodo/test
+ * GET /webhooks/stripe/test
  * Test endpoint to verify webhook is accessible
  */
-webhooks.get('/dodo/test', (c) => {
+webhooks.get('/stripe/test', (c) => {
   return c.json({
     status: 'ok',
-    message: 'Dodo Payments webhook endpoint is active',
+    message: 'Stripe webhook endpoint is active',
     plans: {
       free: '$0/mo - 5,000 tokens',
       pro: '$29/mo - 100,000 tokens',

@@ -73,11 +73,11 @@ const envSchema = z.object({
   GUMROAD_SELLER_ID: z.string().optional(),
   GUMROAD_WEBHOOK_TOKEN: z.string().optional(),
 
-  // Dodo Payments (for subscription payments)
-  DODO_PAYMENTS_API_KEY: z.string().min(1, 'DODO_PAYMENTS_API_KEY is required'),
-  DODO_PAYMENTS_WEBHOOK_KEY: z.string().min(16, 'DODO_PAYMENTS_WEBHOOK_KEY must be at least 16 characters'),
-  DODO_PAYMENTS_ENVIRONMENT: z.enum(['test_mode', 'live_mode']).default('test_mode'),
-  DODO_PAYMENTS_RETURN_URL: z.string().url().optional(), // Optional - if not set, user stays on Dodo page after payment
+  // Stripe (for subscription payments)
+  STRIPE_SECRET_KEY: z.string().min(1, 'STRIPE_SECRET_KEY is required'),
+  STRIPE_WEBHOOK_SECRET: z.string().min(1, 'STRIPE_WEBHOOK_SECRET is required'),
+  STRIPE_SUCCESS_URL: z.string().url().optional(), // Redirect after successful payment
+  STRIPE_CANCEL_URL: z.string().url().optional(), // Redirect if payment cancelled
 
   // Subscription Plan Configuration (Convitsa tokens per month)
   // Optimized for 60% profit margin with rate 30
@@ -90,9 +90,13 @@ const envSchema = z.object({
   PRO_PROJECTS_LIMIT: z.string().default('5').transform(Number),
   BUSINESS_PROJECTS_LIMIT: z.string().default('999').transform(Number), // Effectively unlimited
 
-  // Dodo Payments Product IDs (for checkout)
-  DODO_PRO_PRODUCT_ID: z.string().optional(),
-  DODO_BUSINESS_PRODUCT_ID: z.string().optional(),
+  // Stripe Price IDs (for checkout)
+  // Monthly plans
+  STRIPE_PRO_PRICE_ID: z.string().optional(),
+  STRIPE_BUSINESS_PRICE_ID: z.string().optional(),
+  // Yearly plans
+  STRIPE_PRO_YEARLY_PRICE_ID: z.string().optional(),
+  STRIPE_BUSINESS_YEARLY_PRICE_ID: z.string().optional(),
 
   // Affiliate Configuration
   AFFILIATE_BONUS_TOKENS: z.string().default('5000').transform(Number),
@@ -149,12 +153,16 @@ function formatNumber(num: number): string {
   return num.toLocaleString('en-US');
 }
 
+// Billing interval type
+export type BillingInterval = 'monthly' | 'yearly';
+
 // Subscription plan configuration (all token values are Convitsa tokens)
 export const subscriptionPlans = {
   free: {
     tier: 'free' as const,
     name: 'Free',
     price: 0,
+    yearlyPrice: 0,
     tokensPerMonth: env.FREE_TOKENS_PER_MONTH, // Convitsa tokens
     projectsLimit: env.FREE_PROJECTS_LIMIT,
     maxMessagesPerSession: env.FREE_MAX_MESSAGES_PER_SESSION,
@@ -169,7 +177,8 @@ export const subscriptionPlans = {
   pro: {
     tier: 'pro' as const,
     name: 'Pro',
-    price: 29,
+    price: 29, // Monthly price
+    yearlyPrice: 276, // Yearly price (20% discount)
     tokensPerMonth: env.PRO_TOKENS_PER_MONTH, // Convitsa tokens
     projectsLimit: env.PRO_PROJECTS_LIMIT,
     maxMessagesPerSession: null,
@@ -187,7 +196,8 @@ export const subscriptionPlans = {
   business: {
     tier: 'business' as const,
     name: 'Business',
-    price: 79,
+    price: 79, // Monthly price
+    yearlyPrice: 756, // Yearly price (20% discount)
     tokensPerMonth: env.BUSINESS_TOKENS_PER_MONTH, // Convitsa tokens
     projectsLimit: env.BUSINESS_PROJECTS_LIMIT,
     maxMessagesPerSession: null,
@@ -205,6 +215,40 @@ export const subscriptionPlans = {
 
 export function getSubscriptionPlan(tier: 'free' | 'pro' | 'business') {
   return subscriptionPlans[tier];
+}
+
+/**
+ * Get Stripe price ID for a tier and billing interval
+ */
+export function getPriceId(tier: 'pro' | 'business', interval: BillingInterval): string | undefined {
+  if (tier === 'pro') {
+    return interval === 'yearly' ? env.STRIPE_PRO_YEARLY_PRICE_ID : env.STRIPE_PRO_PRICE_ID;
+  }
+  return interval === 'yearly' ? env.STRIPE_BUSINESS_YEARLY_PRICE_ID : env.STRIPE_BUSINESS_PRICE_ID;
+}
+
+/**
+ * Get tier and billing interval from Stripe price ID
+ */
+export function getTierFromPriceId(priceId: string): { tier: 'free' | 'pro' | 'business'; billingInterval: BillingInterval } {
+  // Monthly prices
+  if (priceId === env.STRIPE_PRO_PRICE_ID) {
+    return { tier: 'pro', billingInterval: 'monthly' };
+  }
+  if (priceId === env.STRIPE_BUSINESS_PRICE_ID) {
+    return { tier: 'business', billingInterval: 'monthly' };
+  }
+  
+  // Yearly prices
+  if (priceId === env.STRIPE_PRO_YEARLY_PRICE_ID) {
+    return { tier: 'pro', billingInterval: 'yearly' };
+  }
+  if (priceId === env.STRIPE_BUSINESS_YEARLY_PRICE_ID) {
+    return { tier: 'business', billingInterval: 'yearly' };
+  }
+  
+  // Default to free
+  return { tier: 'free', billingInterval: 'monthly' };
 }
 
 /**

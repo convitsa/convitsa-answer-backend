@@ -1,24 +1,22 @@
 import { Types } from 'mongoose';
-import DodoPayments from 'dodopayments';
+import Stripe from 'stripe';
 import { Subscription, User, Project } from '../db/schemas';
 import { getSubscriptionPlan, env, openAIToConvitsaTokens } from '../config/env';
 import { EmailService } from './email.service';
-import type { ISubscription, SubscriptionTier, SubscriptionStatus, ServiceResult } from '../types';
+import type { ISubscription, SubscriptionTier, SubscriptionStatus, BillingInterval, ServiceResult } from '../types';
 
-// Initialize Dodo Payments client for subscription management
-const dodoClient = new DodoPayments({
-  bearerToken: env.DODO_PAYMENTS_API_KEY,
-  environment: env.DODO_PAYMENTS_ENVIRONMENT as 'test_mode' | 'live_mode',
-});
+// Initialize Stripe client for subscription management
+const stripe = new Stripe(env.STRIPE_SECRET_KEY);
 
 // Low tokens warning threshold (% of limit)
 const LOW_TOKENS_THRESHOLD_PERCENT = 10;
 
 export interface CreateSubscriptionInput {
   tier: SubscriptionTier;
-  dodoCustomerId?: string;
-  dodoSubscriptionId?: string;
-  dodoProductId?: string;
+  billingInterval?: BillingInterval;
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  stripePriceId?: string;
   currentPeriodEnd: Date;
   bonusTokens?: number; // For affiliate referrals
 }
@@ -26,9 +24,10 @@ export interface CreateSubscriptionInput {
 export interface UpdateSubscriptionInput {
   tier?: SubscriptionTier;
   status?: SubscriptionStatus;
-  dodoCustomerId?: string;
-  dodoSubscriptionId?: string;
-  dodoProductId?: string;
+  billingInterval?: BillingInterval;
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  stripePriceId?: string;
   currentPeriodStart?: Date;
   currentPeriodEnd?: Date;
   cancelAtPeriodEnd?: boolean;
@@ -112,14 +111,16 @@ export class SubscriptionService {
     try {
       const plan = getSubscriptionPlan(input.tier);
       const now = new Date();
+      const billingInterval = input.billingInterval || 'monthly';
 
       // Build update object
       const updateSet: Record<string, any> = {
         tier: input.tier,
         status: 'active',
-        dodoCustomerId: input.dodoCustomerId,
-        dodoSubscriptionId: input.dodoSubscriptionId,
-        dodoProductId: input.dodoProductId,
+        billingInterval,
+        stripeCustomerId: input.stripeCustomerId,
+        stripeSubscriptionId: input.stripeSubscriptionId,
+        stripePriceId: input.stripePriceId,
         currentPeriodStart: now,
         currentPeriodEnd: input.currentPeriodEnd,
         cancelAtPeriodEnd: false,
@@ -146,7 +147,7 @@ export class SubscriptionService {
         { upsert: true, new: true }
       );
 
-      console.log(`✅ Created/updated subscription for user ${userId}: ${input.tier}`);
+      console.log(`✅ Created/updated subscription for user ${userId}: ${input.tier} (${billingInterval})`);
 
       // Send welcome email for paid plans
       if (input.tier !== 'free') {
@@ -187,10 +188,11 @@ export class SubscriptionService {
         updateData.tokensLimit = plan.tokensPerMonth;
         updateData.projectsLimit = plan.projectsLimit;
       }
+      if (input.billingInterval) updateData.billingInterval = input.billingInterval;
       if (input.status) updateData.status = input.status;
-      if (input.dodoCustomerId) updateData.dodoCustomerId = input.dodoCustomerId;
-      if (input.dodoSubscriptionId) updateData.dodoSubscriptionId = input.dodoSubscriptionId;
-      if (input.dodoProductId) updateData.dodoProductId = input.dodoProductId;
+      if (input.stripeCustomerId) updateData.stripeCustomerId = input.stripeCustomerId;
+      if (input.stripeSubscriptionId) updateData.stripeSubscriptionId = input.stripeSubscriptionId;
+      if (input.stripePriceId) updateData.stripePriceId = input.stripePriceId;
       if (input.currentPeriodStart) updateData.currentPeriodStart = input.currentPeriodStart;
       if (input.currentPeriodEnd) updateData.currentPeriodEnd = input.currentPeriodEnd;
       if (typeof input.cancelAtPeriodEnd === 'boolean') updateData.cancelAtPeriodEnd = input.cancelAtPeriodEnd;
@@ -233,10 +235,10 @@ export class SubscriptionService {
   }
 
   /**
-   * Cancel old Dodo subscriptions when user switches to a new plan
+   * Cancel old Stripe subscriptions when user switches to a new plan
    * This is called before creating a new subscription to avoid duplicate billing
    */
-  static async cancelOldDodoSubscriptions(
+  static async cancelOldStripeSubscriptions(
     userId: string,
     newSubscriptionId: string
   ): Promise<void> {
@@ -246,24 +248,22 @@ export class SubscriptionService {
         userId: new Types.ObjectId(userId),
       }).lean();
 
-      // If there's an existing Dodo subscription that's different from the new one, cancel it
+      // If there's an existing Stripe subscription that's different from the new one, cancel it
       if (
-        existingSub?.dodoSubscriptionId &&
-        existingSub.dodoSubscriptionId !== newSubscriptionId &&
+        existingSub?.stripeSubscriptionId &&
+        existingSub.stripeSubscriptionId !== newSubscriptionId &&
         existingSub.status === 'active'
       ) {
-        console.log(`🔄 Cancelling old Dodo subscription ${existingSub.dodoSubscriptionId} for user ${userId}`);
+        console.log(`🔄 Cancelling old Stripe subscription ${existingSub.stripeSubscriptionId} for user ${userId}`);
         
         try {
-          // Cancel immediately in Dodo Payments (not at period end)
-          await dodoClient.subscriptions.update(existingSub.dodoSubscriptionId, {
-            status: 'cancelled',
-          } as any);
+          // Cancel immediately in Stripe (not at period end)
+          await stripe.subscriptions.cancel(existingSub.stripeSubscriptionId);
           
-          console.log(`✅ Successfully cancelled old subscription ${existingSub.dodoSubscriptionId}`);
+          console.log(`✅ Successfully cancelled old subscription ${existingSub.stripeSubscriptionId}`);
         } catch (cancelError) {
           // Log but don't fail - the subscription might already be cancelled
-          console.error(`⚠️ Failed to cancel old subscription ${existingSub.dodoSubscriptionId}:`, cancelError);
+          console.error(`⚠️ Failed to cancel old subscription ${existingSub.stripeSubscriptionId}:`, cancelError);
         }
       }
     } catch (error) {
@@ -521,21 +521,21 @@ export class SubscriptionService {
   }
 
   /**
-   * Find subscription by Dodo Payments subscription ID
+   * Find subscription by Stripe subscription ID
    */
-  static async findByDodoSubscriptionId(subscriptionId: string): Promise<ISubscription | null> {
+  static async findByStripeSubscriptionId(subscriptionId: string): Promise<ISubscription | null> {
     const subscription = await Subscription.findOne({
-      dodoSubscriptionId: subscriptionId,
+      stripeSubscriptionId: subscriptionId,
     }).lean();
     return subscription as ISubscription | null;
   }
 
   /**
-   * Find subscription by Dodo Payments customer ID
+   * Find subscription by Stripe customer ID
    */
-  static async findByDodoCustomerId(customerId: string): Promise<ISubscription | null> {
+  static async findByStripeCustomerId(customerId: string): Promise<ISubscription | null> {
     const subscription = await Subscription.findOne({
-      dodoCustomerId: customerId,
+      stripeCustomerId: customerId,
     }).lean();
     return subscription as ISubscription | null;
   }

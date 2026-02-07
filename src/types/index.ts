@@ -119,7 +119,8 @@ export interface DocumentProcessingJob {
 // ============================================================
 
 export type SubscriptionTier = 'free' | 'pro' | 'business';
-// Dodo Payments subscription statuses
+export type BillingInterval = 'monthly' | 'yearly';
+// Stripe subscription statuses
 export type SubscriptionStatus = 'pending' | 'active' | 'on_hold' | 'cancelled' | 'failed' | 'expired';
 
 export interface ISubscription {
@@ -127,10 +128,11 @@ export interface ISubscription {
   userId: Types.ObjectId;
   tier: SubscriptionTier;
   status: SubscriptionStatus;
-  // Dodo Payments fields
-  dodoCustomerId?: string;
-  dodoSubscriptionId?: string;
-  dodoProductId?: string;
+  billingInterval: BillingInterval;
+  // Stripe fields
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  stripePriceId?: string;
   currentPeriodStart: Date;
   currentPeriodEnd: Date;
   cancelAtPeriodEnd: boolean;
@@ -148,6 +150,7 @@ export interface SubscriptionPlan {
   tier: SubscriptionTier;
   name: string;
   price: number; // Monthly price in USD
+  yearlyPrice: number; // Yearly price in USD
   tokensPerMonth: number;
   projectsLimit: number;
   maxMessagesPerSession: number | null;
