@@ -268,16 +268,13 @@ webhooks.post('/stripe', async (c) => {
       return c.json({ error: 'Missing signature' }, 401);
     }
 
-    // Verify webhook signature
+    // Verify webhook signature (use async version for Bun/SubtleCrypto compatibility)
     let event: Stripe.Event;
     try {
-      event = stripe.webhooks.constructEvent(rawBody, sig, env.STRIPE_WEBHOOK_SECRET);
+      event = await stripe.webhooks.constructEventAsync(rawBody, sig, env.STRIPE_WEBHOOK_SECRET);
     } catch (err: any) {
       console.error('❌ Stripe webhook: Invalid signature');
       console.error('   Error:', err.message);
-      console.error('   Signature header:', sig.substring(0, 50) + '...');
-      console.error('   Body length:', rawBody.length);
-      console.error('   Webhook secret configured:', env.STRIPE_WEBHOOK_SECRET ? 'Yes (starts with ' + env.STRIPE_WEBHOOK_SECRET.substring(0, 10) + '...)' : 'No');
       return c.json({ error: 'Invalid signature' }, 401);
     }
 
