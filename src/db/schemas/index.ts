@@ -26,3 +26,9 @@ export { LostLead, type LostLeadDocument } from './lost-lead.schema';
 
 // Magic link schema
 export { MagicLink, type MagicLinkDocument, type IMagicLink } from './magic-link.schema';
+
+// Cancellation feedback schema
+export { CancellationFeedback, type CancellationFeedbackDocument, type ICancellationFeedback, type CancellationReason } from './cancellation-feedback.schema';
+
+// Feature request schema
+export { FeatureRequest, type FeatureRequestDocument, type IFeatureRequest } from './feature-request.schema';

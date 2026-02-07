@@ -821,6 +821,144 @@ export class EmailService {
     }
   }
 
+  /**
+   * Send feature request notification to admin (mahammad@convitsa.com)
+   */
+  static async sendFeatureRequestToAdmin(
+    userEmail: string,
+    subscriptionTier: string,
+    requestText: string
+  ): Promise<void> {
+    try {
+      const content = `
+        <p style="font-size: 14px; color: ${COLORS.textMuted}; margin: 0 0 24px; line-height: 1.5;">
+          A user has submitted a feature request.
+        </p>
+        <div style="margin: 24px 0; padding: 20px 0; border-top: 1px solid ${COLORS.border}; border-bottom: 1px solid ${COLORS.border};">
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">User</td>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">${userEmail}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">Plan</td>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">${subscriptionTier}</td>
+            </tr>
+          </table>
+        </div>
+        <div style="margin: 24px 0; padding: 16px; background: ${COLORS.backgroundMuted}; border-radius: 6px;">
+          <p style="font-size: 13px; color: ${COLORS.textSecondary}; margin: 0 0 8px;">Feature Request:</p>
+          <p style="font-size: 14px; color: ${COLORS.textPrimary}; margin: 0; line-height: 1.6; white-space: pre-wrap;">${requestText}</p>
+        </div>
+      `;
+
+      await resend.emails.send({
+        from: env.RESEND_FROM_EMAIL,
+        to: 'mahammad@convitsa.com',
+        subject: `Feature Request from ${userEmail}`,
+        html: getEmailTemplate({ heading: 'New Feature Request', content, accentColor: COLORS.brandPurple }),
+        text: `Feature Request from ${userEmail}\n\nPlan: ${subscriptionTier}\n\nRequest:\n${requestText}`,
+      });
+
+      console.log(`✉️ Feature request notification sent to admin from ${userEmail}`);
+    } catch (error) {
+      console.error('Failed to send feature request to admin:', error);
+    }
+  }
+
+  /**
+   * Send feature request confirmation to user
+   */
+  static async sendFeatureRequestConfirmation(to: string): Promise<void> {
+    try {
+      const content = `
+        <p style="font-size: 14px; color: ${COLORS.textMuted}; margin: 0 0 24px; line-height: 1.5;">
+          Thank you for submitting your feature request! We appreciate you taking the time to share your ideas with us.
+        </p>
+        <p style="font-size: 14px; color: ${COLORS.textMuted}; margin: 0 0 24px; line-height: 1.5;">
+          I'm personally reviewing your request and will get back to you as soon as possible regarding its feasibility and potential implementation timeline.
+        </p>
+        <p style="font-size: 14px; color: ${COLORS.textMuted}; margin: 0; line-height: 1.5;">
+          Best regards,<br>
+          <strong>Mahammad</strong><br>
+          Founder, Convitsa
+        </p>
+      `;
+
+      await resend.emails.send({
+        from: env.RESEND_FROM_EMAIL,
+        to,
+        subject: 'We received your feature request',
+        html: getEmailTemplate({ heading: 'Feature Request Received', content, ctaText: 'Open Convitsa', accentColor: COLORS.success }),
+        text: `Thank you for submitting your feature request! We appreciate you taking the time to share your ideas with us.\n\nI'm personally reviewing your request and will get back to you as soon as possible regarding its feasibility and potential implementation timeline.\n\nBest regards,\nMahammad\nFounder, Convitsa`,
+      });
+
+      console.log(`✉️ Feature request confirmation sent to ${to}`);
+    } catch (error) {
+      console.error('Failed to send feature request confirmation:', error);
+    }
+  }
+
+  /**
+   * Send cancellation feedback notification to admin
+   */
+  static async sendCancellationFeedbackToAdmin(
+    userEmail: string,
+    subscriptionTier: string,
+    billingInterval: string,
+    reason?: string,
+    feedback?: string
+  ): Promise<void> {
+    try {
+      const reasonLabels: Record<string, string> = {
+        missing_features: 'Missing features',
+        price: 'Price too high',
+        not_using: 'Not using enough',
+        switching: 'Switching to competitor',
+        other: 'Other',
+      };
+
+      const content = `
+        <p style="font-size: 14px; color: ${COLORS.textMuted}; margin: 0 0 24px; line-height: 1.5;">
+          A user has cancelled their subscription.
+        </p>
+        <div style="margin: 24px 0; padding: 20px 0; border-top: 1px solid ${COLORS.border}; border-bottom: 1px solid ${COLORS.border};">
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">User</td>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">${userEmail}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">Plan</td>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">${subscriptionTier} (${billingInterval})</td>
+            </tr>
+            ${reason ? `<tr>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">Reason</td>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.warning}; text-align: right; font-weight: 500;">${reasonLabels[reason] || reason}</td>
+            </tr>` : ''}
+          </table>
+        </div>
+        ${feedback ? `
+        <div style="margin: 24px 0; padding: 16px; background: ${COLORS.backgroundMuted}; border-radius: 6px;">
+          <p style="font-size: 13px; color: ${COLORS.textSecondary}; margin: 0 0 8px;">Feedback:</p>
+          <p style="font-size: 14px; color: ${COLORS.textPrimary}; margin: 0; line-height: 1.6; white-space: pre-wrap;">${feedback}</p>
+        </div>` : ''}
+      `;
+
+      await resend.emails.send({
+        from: env.RESEND_FROM_EMAIL,
+        to: 'mahammad@convitsa.com',
+        subject: `Subscription Cancelled: ${userEmail} (${subscriptionTier})`,
+        html: getEmailTemplate({ heading: 'Subscription Cancelled', content, accentColor: COLORS.warning }),
+        text: `Subscription Cancelled\n\nUser: ${userEmail}\nPlan: ${subscriptionTier} (${billingInterval})\n${reason ? `Reason: ${reasonLabels[reason] || reason}\n` : ''}${feedback ? `\nFeedback:\n${feedback}` : ''}`,
+      });
+
+      console.log(`✉️ Cancellation feedback sent to admin for ${userEmail}`);
+    } catch (error) {
+      console.error('Failed to send cancellation feedback to admin:', error);
+    }
+  }
+
   // Legacy method aliases for backwards compatibility
   static async sendCreditsPurchasedEmail(to: string, credits: number, newBalance: number): Promise<void> {
     // Redirect to subscription started for new subscription model

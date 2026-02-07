@@ -2,8 +2,12 @@ import { Hono } from 'hono';
 import Stripe from 'stripe';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { SubscriptionService } from '../../services/subscription.service';
+import { EmailService } from '../../services/email.service';
 import { env, subscriptionPlans, getSubscriptionPlan, getPriceId, type BillingInterval } from '../../config/env';
 import type { SubscriptionTier } from '../../types';
+import { CancellationFeedback, type CancellationReason } from '../../db/schemas/cancellation-feedback.schema';
+import { FeatureRequest } from '../../db/schemas/feature-request.schema';
+import { Types } from 'mongoose';
 
 // Initialize Stripe client
 const stripe = new Stripe(env.STRIPE_SECRET_KEY);
@@ -87,7 +91,13 @@ subscription.get('/usage', async (c) => {
   
   const stats = await SubscriptionService.getUsageStats(user.userId);
 
-  return c.json({ usage: stats });
+  // Return flat response as per spec
+  return c.json({
+    tokensUsed: stats.tokensUsed,
+    tokensLimit: stats.tokensLimit,
+    projectsUsed: stats.projectsUsed,
+    projectsLimit: stats.projectsLimit,
+  });
 });
 
 /**
@@ -256,9 +266,15 @@ subscription.post('/portal', async (c) => {
 /**
  * POST /subscription/cancel
  * Request subscription cancellation (takes effect at period end)
+ * Accepts optional reason and feedback for analytics
  */
 subscription.post('/cancel', async (c) => {
   const user = c.get('user');
+  const body = await c.req.json().catch(() => ({}));
+  const { reason, feedback } = body as { 
+    reason?: CancellationReason; 
+    feedback?: string;
+  };
 
   const sub = await SubscriptionService.getSubscription(user.userId);
 
@@ -296,15 +312,30 @@ subscription.post('/cancel', async (c) => {
       return c.json({ error: result.error, code: result.code }, 500);
     }
 
-    console.log(`⚠️ Subscription cancellation requested for ${user.email}`);
-
-    return c.json({
-      message: 'Your subscription will be cancelled at the end of the current billing period',
-      subscription: {
-        cancelAtPeriodEnd: true,
-        currentPeriodEnd: sub.currentPeriodEnd,
-      },
+    // Store cancellation feedback for analytics
+    await CancellationFeedback.create({
+      userId: new Types.ObjectId(user.userId),
+      userEmail: user.email,
+      subscriptionTier: sub.tier,
+      billingInterval: sub.billingInterval || 'monthly',
+      reason: reason,
+      feedback: feedback?.slice(0, 2000), // Limit feedback length
     });
+
+    // Send cancellation feedback to admin
+    EmailService.sendCancellationFeedbackToAdmin(
+      user.email,
+      sub.tier,
+      sub.billingInterval || 'monthly',
+      reason,
+      feedback
+    ).catch((err) => {
+      console.error('Failed to send cancellation feedback email:', err);
+    });
+
+    console.log(`⚠️ Subscription cancellation requested for ${user.email}${reason ? ` (reason: ${reason})` : ''}`);
+
+    return c.json({});
   } catch (error) {
     console.error('❌ Cancel subscription error:', error);
     return c.json({ 
@@ -352,14 +383,7 @@ subscription.post('/reactivate', async (c) => {
 
     console.log(`✅ Subscription reactivated for ${user.email}`);
 
-    return c.json({
-      message: 'Your subscription has been reactivated',
-      subscription: {
-        cancelAtPeriodEnd: false,
-        tier: sub.tier,
-        status: 'active',
-      },
-    });
+    return c.json({});
   } catch (error) {
     console.error('❌ Reactivate subscription error:', error);
     return c.json({ 
@@ -380,10 +404,72 @@ subscription.get('/can-create-project', async (c) => {
   const stats = await SubscriptionService.getUsageStats(user.userId);
 
   return c.json({
-    canCreateProject: canCreate,
-    projectsUsed: stats.projectsUsed,
-    projectsLimit: stats.projectsLimit,
+    canCreate: canCreate,
+    currentCount: stats.projectsUsed,
+    limit: stats.projectsLimit,
   });
+});
+
+/**
+ * POST /subscription/feature-request
+ * Submit a feature request
+ * Sends notification to admin and confirmation to user
+ */
+subscription.post('/feature-request', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json();
+  const { text } = body as { text: string };
+
+  if (!text || typeof text !== 'string' || text.trim().length === 0) {
+    return c.json({ 
+      error: 'Feature request text is required', 
+      code: 'INVALID_REQUEST' 
+    }, 400);
+  }
+
+  if (text.length > 5000) {
+    return c.json({ 
+      error: 'Feature request text is too long (max 5000 characters)', 
+      code: 'TEXT_TOO_LONG' 
+    }, 400);
+  }
+
+  try {
+    const sub = await SubscriptionService.getSubscription(user.userId);
+
+    // Store feature request in DB
+    await FeatureRequest.create({
+      userId: new Types.ObjectId(user.userId),
+      userEmail: user.email,
+      subscriptionTier: sub.tier,
+      text: text.trim(),
+      status: 'pending',
+    });
+
+    // Send notification to admin
+    EmailService.sendFeatureRequestToAdmin(
+      user.email,
+      sub.tier,
+      text.trim()
+    ).catch((err) => {
+      console.error('Failed to send feature request to admin:', err);
+    });
+
+    // Send confirmation to user
+    EmailService.sendFeatureRequestConfirmation(user.email).catch((err) => {
+      console.error('Failed to send feature request confirmation:', err);
+    });
+
+    console.log(`📝 Feature request submitted by ${user.email}`);
+
+    return c.json({});
+  } catch (error) {
+    console.error('❌ Feature request error:', error);
+    return c.json({ 
+      error: 'Failed to submit feature request', 
+      code: 'REQUEST_FAILED' 
+    }, 500);
+  }
 });
 
 export { subscription as subscriptionRoutes };
