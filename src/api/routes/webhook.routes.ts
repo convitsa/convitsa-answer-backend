@@ -258,7 +258,7 @@ webhooks.get('/gumroad/test', (c) => {
 webhooks.post('/stripe', async (c) => {
   try {
     // Get raw body for signature verification
-    const rawBody = await c.req.text();
+    const rawBody = await c.req.raw.body;
     
     // Get Stripe signature header
     const sig = c.req.header('stripe-signature');
