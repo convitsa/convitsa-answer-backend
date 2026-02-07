@@ -372,6 +372,7 @@ webhooks.post('/stripe', async (c) => {
         const customUserId = metadata.user_id;
         const isNewUser = metadata.is_new_user === 'true';
         const generatedPassword = metadata.temp_password;
+        const isCreateEvent = event.type === 'customer.subscription.created';
 
         console.log(`📋 Subscription ${event.type}:`, {
           subscriptionId,
@@ -379,6 +380,8 @@ webhooks.post('/stripe', async (c) => {
           priceId,
           status: subscription.status,
           cancelAtPeriodEnd: subscription.cancel_at_period_end,
+          currentPeriodStart: subscription.current_period_start,
+          currentPeriodEnd: subscription.current_period_end,
         });
 
         // Get tier and billing interval from price ID
@@ -448,25 +451,34 @@ webhooks.post('/stripe', async (c) => {
         if (subscription.status === 'active' || subscription.status === 'trialing') {
           const plan = getSubscriptionPlan(tier);
 
-          await SubscriptionService.createSubscription(userId, {
-            tier,
-            billingInterval,
-            stripeCustomerId: customerId,
-            stripeSubscriptionId: subscriptionId,
-            stripePriceId: priceId,
-            currentPeriodEnd: periodEnd,
-            bonusTokens: 0,
-          });
-
-          // Update period start (only if valid date)
-          if (periodStart && !isNaN(periodStart.getTime())) {
-            await Subscription.findOneAndUpdate(
-              { userId: user._id },
-              { $set: { currentPeriodStart: periodStart } }
-            );
+          if (isCreateEvent) {
+            // NEW subscription - create with all dates from Stripe
+            await SubscriptionService.createSubscription(userId, {
+              tier,
+              billingInterval,
+              stripeCustomerId: customerId,
+              stripeSubscriptionId: subscriptionId,
+              stripePriceId: priceId,
+              currentPeriodStart: periodStart, // From Stripe
+              currentPeriodEnd: periodEnd, // From Stripe
+              trialEnd: trialEnd, // From Stripe
+              bonusTokens: 0,
+            });
+            console.log(`✅ New subscription created for ${resolvedEmail}: ${tier} (${billingInterval}), next payment: ${periodEnd.toISOString()}`);
+          } else {
+            // UPDATE event - only update dates and status, DO NOT reset tokenResetDate
+            await SubscriptionService.updateSubscription(userId, {
+              tier,
+              billingInterval,
+              stripeCustomerId: customerId,
+              stripeSubscriptionId: subscriptionId,
+              stripePriceId: priceId,
+              currentPeriodStart: periodStart, // From Stripe
+              currentPeriodEnd: periodEnd, // From Stripe
+              status: 'active',
+            });
+            console.log(`✅ Subscription updated for ${resolvedEmail}: ${tier} (${billingInterval}), next payment: ${periodEnd.toISOString()}`);
           }
-
-          console.log(`✅ Subscription ${isTrialing ? 'trialing' : 'active'} for ${resolvedEmail}: ${tier} (${billingInterval})${isTrialing && trialEnd ? ` - trial ends ${trialEnd.toISOString()}` : ''}`);
 
           // Send appropriate email
           const displayPrice = billingInterval === 'yearly' ? plan.yearlyPrice : plan.price;
@@ -493,13 +505,14 @@ webhooks.post('/stripe', async (c) => {
             EmailService.sendSubscriptionReactivatedEmail(resolvedEmail, plan.name).catch((err) => {
               console.error('Failed to send subscription reactivated email:', err);
             });
-          } else if (event.type === 'customer.subscription.created') {
+          } else if (isCreateEvent) {
             EmailService.sendSubscriptionStartedEmail(
               resolvedEmail,
               `${plan.name} (${billingInterval === 'yearly' ? 'Yearly' : 'Monthly'})`,
               displayPrice,
               plan.tokensPerMonth,
-              periodEnd
+              periodEnd,
+              billingInterval
             ).catch((err) => {
               console.error('Failed to send subscription started email:', err);
             });
@@ -630,8 +643,12 @@ webhooks.post('/stripe', async (c) => {
         const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
         const periodEnd = new Date(stripeSubscription.current_period_end * 1000);
         const periodStart = new Date(stripeSubscription.current_period_start * 1000);
+        
+        // Calculate next token reset date (1 month from period start)
+        const tokenResetDate = new Date(periodStart);
+        tokenResetDate.setMonth(tokenResetDate.getMonth() + 1);
 
-        // Update subscription and reset usage
+        // Update subscription with Stripe dates and reset usage
         await SubscriptionService.updateSubscription(userId, {
           status: 'active',
           currentPeriodStart: periodStart,
@@ -640,17 +657,18 @@ webhooks.post('/stripe', async (c) => {
 
         await Subscription.findOneAndUpdate(
           { userId: user._id },
-          { $set: { tokensUsedThisMonth: 0 } }
+          { $set: { tokensUsedThisMonth: 0, tokenResetDate: tokenResetDate } }
         );
 
-        console.log(`💳 Subscription renewed for ${resolvedEmail}, usage reset`);
+        console.log(`💳 Subscription renewed for ${resolvedEmail}, usage reset. Next payment: ${periodEnd.toISOString()}`);
 
         const renewPlan = getSubscriptionPlan(existingSub.tier);
         EmailService.sendSubscriptionRenewedEmail(
           resolvedEmail,
           renewPlan.name,
           renewPlan.tokensPerMonth,
-          periodEnd
+          periodEnd,
+          existingSub.billingInterval || 'monthly'
         ).catch((err) => {
           console.error('Failed to send subscription renewed email:', err);
         });

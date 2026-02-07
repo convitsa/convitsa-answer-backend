@@ -17,7 +17,9 @@ export interface CreateSubscriptionInput {
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
   stripePriceId?: string;
-  currentPeriodEnd: Date;
+  currentPeriodStart: Date; // From Stripe
+  currentPeriodEnd: Date; // From Stripe
+  trialEnd?: Date | null; // From Stripe (if in trial)
   bonusTokens?: number; // For affiliate referrals
 }
 
@@ -112,14 +114,13 @@ export class SubscriptionService {
   ): Promise<ServiceResult<ISubscription>> {
     try {
       const plan = getSubscriptionPlan(input.tier);
-      const now = new Date();
       const billingInterval = input.billingInterval || 'monthly';
 
-      // Calculate token reset date (always 1 month from now, regardless of billing interval)
-      const tokenResetDate = new Date(now);
+      // Token reset date: 1 month from period start (always monthly, even for yearly plans)
+      const tokenResetDate = new Date(input.currentPeriodStart);
       tokenResetDate.setMonth(tokenResetDate.getMonth() + 1);
 
-      // Build update object
+      // Build update object - ALL dates come from Stripe
       const updateSet: Record<string, any> = {
         tier: input.tier,
         status: 'active',
@@ -127,14 +128,14 @@ export class SubscriptionService {
         stripeCustomerId: input.stripeCustomerId,
         stripeSubscriptionId: input.stripeSubscriptionId,
         stripePriceId: input.stripePriceId,
-        currentPeriodStart: now,
-        currentPeriodEnd: input.currentPeriodEnd,
-        tokenResetDate: tokenResetDate, // Tokens always refresh monthly
+        currentPeriodStart: input.currentPeriodStart, // From Stripe
+        currentPeriodEnd: input.currentPeriodEnd, // From Stripe
+        tokenResetDate: tokenResetDate, // Calculated: 1 month from period start
         cancelAtPeriodEnd: false,
         tokensUsedThisMonth: 0,
         tokensLimit: plan.tokensPerMonth,
         projectsLimit: plan.projectsLimit,
-        updatedAt: now,
+        updatedAt: new Date(),
       };
       
       // Add bonus tokens if provided (affiliate referral)

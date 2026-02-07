@@ -20,6 +20,17 @@ const COLORS = {
 const PLUGIN_URL = 'https://framer.com/marketplace/plugins/convitsa-answer';
 
 /**
+ * Format date consistently for emails
+ */
+function formatDate(date: Date): string {
+  return date.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+}
+
+/**
  * Generate consistent email HTML template
  */
 function getEmailTemplate(options: {
@@ -265,15 +276,26 @@ export class EmailService {
 
   /**
    * Send subscription started email
+   * @param billingInterval - 'monthly' or 'yearly'
    */
   static async sendSubscriptionStartedEmail(
     to: string,
     planName: string,
     price: number,
     tokensPerMonth: number,
-    nextBillingDate: Date
+    nextBillingDate: Date,
+    billingInterval: 'monthly' | 'yearly' = 'monthly'
   ): Promise<void> {
     try {
+      const isYearly = billingInterval === 'yearly';
+      const priceLabel = isYearly ? `$${price}/year` : `$${price}/month`;
+      const tokenRefreshNote = isYearly 
+        ? `<tr>
+            <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">Token refresh</td>
+            <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">Monthly</td>
+          </tr>`
+        : '';
+
       const content = `
         <p style="font-size: 14px; color: ${COLORS.textMuted}; margin: 0 0 24px; line-height: 1.5;">
           Thank you for subscribing! Your ${planName} plan is now active.
@@ -286,20 +308,21 @@ export class EmailService {
             </tr>
             <tr>
               <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">Price</td>
-              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">$${price}/month</td>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">${priceLabel}</td>
             </tr>
             <tr>
               <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">Tokens</td>
               <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.success}; text-align: right; font-weight: 500;">${tokensPerMonth.toLocaleString()}/month</td>
             </tr>
+            ${tokenRefreshNote}
             <tr>
               <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">Next billing</td>
-              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">${nextBillingDate.toLocaleDateString()}</td>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">${formatDate(nextBillingDate)}</td>
             </tr>
           </table>
         </div>
         <p style="font-size: 14px; color: ${COLORS.textMuted}; margin: 0; line-height: 1.5;">
-          Your tokens are ready to use. Enjoy Convitsa!
+          Your tokens are ready to use${isYearly ? ' and refresh monthly' : ''}. Enjoy Convitsa!
         </p>
       `;
 
@@ -308,7 +331,7 @@ export class EmailService {
         to,
         subject: `Welcome to ${planName}`,
         html: getEmailTemplate({ heading: 'Subscription activated', content, ctaText: 'Open Convitsa', accentColor: COLORS.success }),
-        text: `Thank you for subscribing!\n\nPlan: ${planName}\nPrice: $${price}/month\nTokens: ${tokensPerMonth.toLocaleString()}/month\nNext billing: ${nextBillingDate.toLocaleDateString()}\n\nYour tokens are ready to use. Enjoy Convitsa!`,
+        text: `Thank you for subscribing!\n\nPlan: ${planName}\nPrice: ${priceLabel}\nTokens: ${tokensPerMonth.toLocaleString()}/month${isYearly ? ' (refresh monthly)' : ''}\nNext billing: ${formatDate(nextBillingDate)}\n\nYour tokens are ready to use. Enjoy Convitsa!`,
       });
 
       console.log(`✉️ Subscription started email sent to ${to}`);
@@ -324,9 +347,11 @@ export class EmailService {
     to: string,
     planName: string,
     tokensReset: number,
-    nextBillingDate: Date
+    nextBillingDate: Date,
+    billingInterval: 'monthly' | 'yearly' = 'monthly'
   ): Promise<void> {
     try {
+      const isYearly = billingInterval === 'yearly';
       const content = `
         <p style="font-size: 14px; color: ${COLORS.textMuted}; margin: 0 0 24px; line-height: 1.5;">
           Your ${planName} subscription has been renewed and your tokens have been reset.
@@ -337,9 +362,13 @@ export class EmailService {
               <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">Tokens available</td>
               <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.success}; text-align: right; font-weight: 500;">${tokensReset.toLocaleString()}</td>
             </tr>
+            ${isYearly ? `<tr>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">Token refresh</td>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">Monthly</td>
+            </tr>` : ''}
             <tr>
               <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">Next billing</td>
-              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">${nextBillingDate.toLocaleDateString()}</td>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">${formatDate(nextBillingDate)}</td>
             </tr>
           </table>
         </div>
@@ -350,7 +379,7 @@ export class EmailService {
         to,
         subject: 'Your subscription has been renewed',
         html: getEmailTemplate({ heading: 'Subscription renewed', content, ctaText: 'Open Convitsa' }),
-        text: `Your ${planName} subscription has been renewed.\n\nTokens available: ${tokensReset.toLocaleString()}\nNext billing: ${nextBillingDate.toLocaleDateString()}`,
+        text: `Your ${planName} subscription has been renewed.\n\nTokens available: ${tokensReset.toLocaleString()}${isYearly ? ' (refresh monthly)' : ''}\nNext billing: ${formatDate(nextBillingDate)}`,
       });
 
       console.log(`✉️ Subscription renewed email sent to ${to}`);
@@ -376,12 +405,12 @@ export class EmailService {
           <table style="width: 100%; border-collapse: collapse;">
             <tr>
               <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">Access until</td>
-              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">${accessEndsDate.toLocaleDateString()}</td>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textPrimary}; text-align: right; font-weight: 500;">${formatDate(accessEndsDate)}</td>
             </tr>
           </table>
         </div>
         <p style="font-size: 14px; color: ${COLORS.textMuted}; margin: 0; line-height: 1.5;">
-          Changed your mind? You can reactivate your subscription anytime before ${accessEndsDate.toLocaleDateString()}.
+          Changed your mind? You can reactivate your subscription anytime before ${formatDate(accessEndsDate)}.
         </p>
       `;
 
@@ -390,7 +419,7 @@ export class EmailService {
         to,
         subject: 'Your subscription has been cancelled',
         html: getEmailTemplate({ heading: 'Subscription cancelled', content, ctaText: 'Reactivate Subscription' }),
-        text: `Your ${planName} subscription has been cancelled.\n\nYou will continue to have access until ${accessEndsDate.toLocaleDateString()}.\n\nChanged your mind? You can reactivate your subscription anytime.`,
+        text: `Your ${planName} subscription has been cancelled.\n\nYou will continue to have access until ${formatDate(accessEndsDate)}.\n\nChanged your mind? You can reactivate your subscription anytime.`,
       });
 
       console.log(`✉️ Subscription cancelled email sent to ${to}`);
@@ -440,7 +469,7 @@ export class EmailService {
           <table style="width: 100%; border-collapse: collapse;">
             <tr>
               <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.textSecondary};">Next retry</td>
-              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.warning}; text-align: right; font-weight: 500;">${retryDate.toLocaleDateString()}</td>
+              <td style="padding: 8px 0; font-size: 14px; color: ${COLORS.warning}; text-align: right; font-weight: 500;">${formatDate(retryDate)}</td>
             </tr>
           </table>
         </div>
@@ -454,7 +483,7 @@ export class EmailService {
         to,
         subject: 'Payment failed - action required',
         html: getEmailTemplate({ heading: 'Payment failed', content, ctaText: 'Update Payment Method', accentColor: COLORS.warning }),
-        text: `We were unable to process your payment for the ${planName} plan.\n\nPlease update your payment method to avoid service interruption.\n\nNext retry: ${retryDate.toLocaleDateString()}`,
+        text: `We were unable to process your payment for the ${planName} plan.\n\nPlease update your payment method to avoid service interruption.\n\nNext retry: ${formatDate(retryDate)}`,
       });
 
       console.log(`✉️ Payment failed email sent to ${to}`);
