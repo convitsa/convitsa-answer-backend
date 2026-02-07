@@ -59,6 +59,11 @@ const subscriptionSchema = new Schema<SubscriptionDocument>(
         return date;
       },
     },
+    // Trial end date (from Stripe - when trial ends and billing starts)
+    trialEnd: {
+      type: Date,
+      default: null,
+    },
     cancelAtPeriodEnd: {
       type: Boolean,
       default: false,

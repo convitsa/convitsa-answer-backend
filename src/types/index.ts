@@ -134,8 +134,9 @@ export interface ISubscription {
   stripeSubscriptionId?: string;
   stripePriceId?: string;
   currentPeriodStart: Date;
-  currentPeriodEnd: Date; // When payment is due (monthly or yearly)
+  currentPeriodEnd: Date; // End of billing period (from Stripe)
   tokenResetDate?: Date; // When tokens refresh (always monthly)
+  trialEnd?: Date | null; // When trial ends (from Stripe) - next billing date during trial
   cancelAtPeriodEnd: boolean;
   tokensUsedThisMonth: number;
   tokensLimit: number;

@@ -464,9 +464,13 @@ webhooks.post('/stripe', async (c) => {
               trialEnd: trialEnd, // From Stripe
               bonusTokens: 0,
             });
-            console.log(`✅ New subscription created for ${resolvedEmail}: ${tier} (${billingInterval}), next payment: ${periodEnd.toISOString()}`);
+            const nextBillingCreate = isTrialing && trialEnd ? trialEnd : periodEnd;
+            console.log(`✅ New subscription created for ${resolvedEmail}: ${tier} (${billingInterval}), ${isTrialing ? 'trial ends' : 'next payment'}: ${nextBillingCreate.toISOString()}`);
           } else {
             // UPDATE event - only update dates and status, DO NOT reset tokenResetDate
+            // If subscription is active (not trialing), clear trialEnd
+            const updatedTrialEnd = isTrialing ? trialEnd : null;
+            
             await SubscriptionService.updateSubscription(userId, {
               tier,
               billingInterval,
@@ -475,9 +479,12 @@ webhooks.post('/stripe', async (c) => {
               stripePriceId: priceId,
               currentPeriodStart: periodStart, // From Stripe
               currentPeriodEnd: periodEnd, // From Stripe
+              trialEnd: updatedTrialEnd, // From Stripe (null if not in trial)
               status: 'active',
             });
-            console.log(`✅ Subscription updated for ${resolvedEmail}: ${tier} (${billingInterval}), next payment: ${periodEnd.toISOString()}`);
+            
+            const nextBilling = isTrialing && trialEnd ? trialEnd : periodEnd;
+            console.log(`✅ Subscription updated for ${resolvedEmail}: ${tier} (${billingInterval}), ${isTrialing ? 'trial ends' : 'next payment'}: ${nextBilling.toISOString()}`);
           }
 
           // Send appropriate email

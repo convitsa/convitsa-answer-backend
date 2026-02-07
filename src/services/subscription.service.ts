@@ -32,6 +32,7 @@ export interface UpdateSubscriptionInput {
   stripePriceId?: string;
   currentPeriodStart?: Date;
   currentPeriodEnd?: Date;
+  trialEnd?: Date | null; // null to clear trial
   cancelAtPeriodEnd?: boolean;
 }
 
@@ -131,6 +132,7 @@ export class SubscriptionService {
         currentPeriodStart: input.currentPeriodStart, // From Stripe
         currentPeriodEnd: input.currentPeriodEnd, // From Stripe
         tokenResetDate: tokenResetDate, // Calculated: 1 month from period start
+        trialEnd: input.trialEnd || null, // From Stripe (null if no trial)
         cancelAtPeriodEnd: false,
         tokensUsedThisMonth: 0,
         tokensLimit: plan.tokensPerMonth,
@@ -203,6 +205,8 @@ export class SubscriptionService {
       if (input.stripePriceId) updateData.stripePriceId = input.stripePriceId;
       if (input.currentPeriodStart) updateData.currentPeriodStart = input.currentPeriodStart;
       if (input.currentPeriodEnd) updateData.currentPeriodEnd = input.currentPeriodEnd;
+      // Handle trialEnd - can be set to a date or explicitly cleared (null)
+      if (input.trialEnd !== undefined) updateData.trialEnd = input.trialEnd;
       if (typeof input.cancelAtPeriodEnd === 'boolean') updateData.cancelAtPeriodEnd = input.cancelAtPeriodEnd;
 
       const subscription = await Subscription.findOneAndUpdate(

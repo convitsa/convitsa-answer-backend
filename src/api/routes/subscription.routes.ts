@@ -23,6 +23,7 @@ subscription.get('/', async (c) => {
   const sub = await SubscriptionService.getSubscription(user.userId);
   const plan = getSubscriptionPlan(sub.tier);
   const billingInterval = sub.billingInterval || 'monthly';
+  const now = new Date();
 
   // Calculate token reset date (always monthly from currentPeriodStart)
   // If tokenResetDate exists, use it; otherwise calculate from currentPeriodStart
@@ -33,10 +34,15 @@ subscription.get('/', async (c) => {
   }
 
   // If token reset date is in the past, calculate next one
-  const now = new Date();
   while (tokenResetDate < now) {
     tokenResetDate.setMonth(tokenResetDate.getMonth() + 1);
   }
+
+  // Determine next payment date:
+  // - If in trial (trialEnd exists and is in the future), next payment = trialEnd
+  // - Otherwise, next payment = currentPeriodEnd (from Stripe)
+  const isInTrial = sub.trialEnd && new Date(sub.trialEnd) > now;
+  const nextPaymentDate = isInTrial ? sub.trialEnd : sub.currentPeriodEnd;
 
   return c.json({
     subscription: {
@@ -44,10 +50,13 @@ subscription.get('/', async (c) => {
       tier: sub.tier,
       status: sub.status,
       billingInterval,
+      // Trial info
+      isInTrial,
+      trialEnd: sub.trialEnd,
       // Token refresh date (always monthly)
       tokenResetDate: tokenResetDate,
-      // Next payment date (based on billing interval)
-      nextPaymentDate: sub.currentPeriodEnd,
+      // Next payment date (trialEnd if in trial, otherwise currentPeriodEnd)
+      nextPaymentDate: nextPaymentDate,
       // Legacy fields for backwards compatibility
       currentPeriodStart: sub.currentPeriodStart,
       currentPeriodEnd: sub.currentPeriodEnd,
