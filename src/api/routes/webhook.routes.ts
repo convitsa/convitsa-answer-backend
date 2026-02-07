@@ -423,9 +423,13 @@ webhooks.post('/stripe', async (c) => {
         const userId = user._id.toString();
         const resolvedEmail = user.email;
 
-        // Calculate period end
-        const periodEnd = new Date(subscription.current_period_end * 1000);
-        const periodStart = new Date(subscription.current_period_start * 1000);
+        // Calculate period end and start (with fallbacks for trial subscriptions)
+        const periodEnd = subscription.current_period_end 
+          ? new Date(subscription.current_period_end * 1000) 
+          : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // Default 30 days
+        const periodStart = subscription.current_period_start 
+          ? new Date(subscription.current_period_start * 1000) 
+          : new Date();
 
         // Check if this is a reactivation
         const existingSub = await Subscription.findOne({ userId: user._id }).lean();
@@ -454,11 +458,13 @@ webhooks.post('/stripe', async (c) => {
             bonusTokens: 0,
           });
 
-          // Update period start (and trial end if applicable)
-          await Subscription.findOneAndUpdate(
-            { userId: user._id },
-            { $set: { currentPeriodStart: periodStart } }
-          );
+          // Update period start (only if valid date)
+          if (periodStart && !isNaN(periodStart.getTime())) {
+            await Subscription.findOneAndUpdate(
+              { userId: user._id },
+              { $set: { currentPeriodStart: periodStart } }
+            );
+          }
 
           console.log(`✅ Subscription ${isTrialing ? 'trialing' : 'active'} for ${resolvedEmail}: ${tier} (${billingInterval})${isTrialing && trialEnd ? ` - trial ends ${trialEnd.toISOString()}` : ''}`);
 
