@@ -42,8 +42,7 @@ const magicLinkSchema = new Schema<MagicLinkDocument>(
   }
 );
 
-// Index for fast token lookup
-magicLinkSchema.index({ token: 1 });
+// Note: token index is already created by unique: true
 // Index for cleanup of expired tokens
 magicLinkSchema.index({ expiresAt: 1 });
 // Index for finding user's tokens
