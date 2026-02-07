@@ -257,8 +257,9 @@ webhooks.get('/gumroad/test', (c) => {
  */
 webhooks.post('/stripe', async (c) => {
   try {
-    // Get raw body for signature verification
-    const rawBody = await c.req.raw.body;
+    // Get raw body as Buffer for signature verification
+    const arrayBuffer = await c.req.arrayBuffer();
+    const rawBody = Buffer.from(arrayBuffer);
     
     // Get Stripe signature header
     const sig = c.req.header('stripe-signature');
@@ -271,8 +272,12 @@ webhooks.post('/stripe', async (c) => {
     let event: Stripe.Event;
     try {
       event = stripe.webhooks.constructEvent(rawBody, sig, env.STRIPE_WEBHOOK_SECRET);
-    } catch (err) {
-      console.error('❌ Stripe webhook: Invalid signature', err);
+    } catch (err: any) {
+      console.error('❌ Stripe webhook: Invalid signature');
+      console.error('   Error:', err.message);
+      console.error('   Signature header:', sig.substring(0, 50) + '...');
+      console.error('   Body length:', rawBody.length);
+      console.error('   Webhook secret configured:', env.STRIPE_WEBHOOK_SECRET ? 'Yes (starts with ' + env.STRIPE_WEBHOOK_SECRET.substring(0, 10) + '...)' : 'No');
       return c.json({ error: 'Invalid signature' }, 401);
     }
 
