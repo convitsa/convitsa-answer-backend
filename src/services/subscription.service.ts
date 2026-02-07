@@ -67,8 +67,9 @@ export class SubscriptionService {
     
     console.log(`📋 Found subscription for userId=${userId}: tier=${subscription.tier}, status=${subscription.status}`);
 
-    // Check if period needs reset
-    if (new Date() >= subscription.currentPeriodEnd) {
+    // Check if tokens need to be reset (based on tokenResetDate, always monthly)
+    const tokenResetDate = subscription.tokenResetDate || subscription.currentPeriodEnd;
+    if (new Date() >= tokenResetDate) {
       subscription = await this.resetPeriod(userId);
     }
 
@@ -90,6 +91,7 @@ export class SubscriptionService {
       status: 'active',
       currentPeriodStart: now,
       currentPeriodEnd: periodEnd,
+      tokenResetDate: periodEnd, // Tokens reset monthly
       cancelAtPeriodEnd: false,
       tokensUsedThisMonth: 0,
       tokensLimit: freePlan.tokensPerMonth,
@@ -113,6 +115,10 @@ export class SubscriptionService {
       const now = new Date();
       const billingInterval = input.billingInterval || 'monthly';
 
+      // Calculate token reset date (always 1 month from now, regardless of billing interval)
+      const tokenResetDate = new Date(now);
+      tokenResetDate.setMonth(tokenResetDate.getMonth() + 1);
+
       // Build update object
       const updateSet: Record<string, any> = {
         tier: input.tier,
@@ -123,6 +129,7 @@ export class SubscriptionService {
         stripePriceId: input.stripePriceId,
         currentPeriodStart: now,
         currentPeriodEnd: input.currentPeriodEnd,
+        tokenResetDate: tokenResetDate, // Tokens always refresh monthly
         cancelAtPeriodEnd: false,
         tokensUsedThisMonth: 0,
         tokensLimit: plan.tokensPerMonth,
@@ -371,29 +378,43 @@ export class SubscriptionService {
   }
 
   /**
-   * Reset monthly usage when period ends
+   * Reset monthly token usage
+   * Note: This only resets tokens, not the billing period (which is handled by Stripe webhooks)
    */
   static async resetPeriod(userId: string): Promise<ISubscription> {
     const now = new Date();
-    const newPeriodEnd = new Date(now);
-    newPeriodEnd.setMonth(newPeriodEnd.getMonth() + 1);
+    const newTokenResetDate = new Date(now);
+    newTokenResetDate.setMonth(newTokenResetDate.getMonth() + 1);
 
     const subscription = await Subscription.findOneAndUpdate(
       { userId: new Types.ObjectId(userId) },
       {
         $set: {
           tokensUsedThisMonth: 0,
-          currentPeriodStart: now,
-          currentPeriodEnd: newPeriodEnd,
+          tokenResetDate: newTokenResetDate,
           updatedAt: now,
         },
       },
       { new: true }
     ).lean();
 
-    console.log(`🔄 Reset monthly usage for user ${userId}`);
+    console.log(`🔄 Reset monthly token usage for user ${userId}`);
 
     return subscription as ISubscription;
+  }
+
+  /**
+   * Check and reset tokens if needed (called when getting subscription)
+   */
+  static async checkAndResetTokens(subscription: ISubscription): Promise<ISubscription> {
+    const now = new Date();
+    const tokenResetDate = subscription.tokenResetDate || subscription.currentPeriodEnd;
+
+    if (now >= tokenResetDate) {
+      return await this.resetPeriod(subscription.userId.toString());
+    }
+
+    return subscription;
   }
 
   /**

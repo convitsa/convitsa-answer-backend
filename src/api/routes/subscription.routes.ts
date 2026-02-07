@@ -24,12 +24,31 @@ subscription.get('/', async (c) => {
   const plan = getSubscriptionPlan(sub.tier);
   const billingInterval = sub.billingInterval || 'monthly';
 
+  // Calculate token reset date (always monthly from currentPeriodStart)
+  // If tokenResetDate exists, use it; otherwise calculate from currentPeriodStart
+  let tokenResetDate = sub.tokenResetDate;
+  if (!tokenResetDate) {
+    tokenResetDate = new Date(sub.currentPeriodStart);
+    tokenResetDate.setMonth(tokenResetDate.getMonth() + 1);
+  }
+
+  // If token reset date is in the past, calculate next one
+  const now = new Date();
+  while (tokenResetDate < now) {
+    tokenResetDate.setMonth(tokenResetDate.getMonth() + 1);
+  }
+
   return c.json({
     subscription: {
       id: sub._id.toString(),
       tier: sub.tier,
       status: sub.status,
       billingInterval,
+      // Token refresh date (always monthly)
+      tokenResetDate: tokenResetDate,
+      // Next payment date (based on billing interval)
+      nextPaymentDate: sub.currentPeriodEnd,
+      // Legacy fields for backwards compatibility
       currentPeriodStart: sub.currentPeriodStart,
       currentPeriodEnd: sub.currentPeriodEnd,
       cancelAtPeriodEnd: sub.cancelAtPeriodEnd,

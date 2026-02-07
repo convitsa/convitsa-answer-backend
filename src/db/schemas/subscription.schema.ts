@@ -50,6 +50,15 @@ const subscriptionSchema = new Schema<SubscriptionDocument>(
       type: Date,
       required: true,
     },
+    // Token reset date (always monthly, regardless of billing interval)
+    tokenResetDate: {
+      type: Date,
+      default: () => {
+        const date = new Date();
+        date.setMonth(date.getMonth() + 1);
+        return date;
+      },
+    },
     cancelAtPeriodEnd: {
       type: Boolean,
       default: false,
