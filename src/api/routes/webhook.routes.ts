@@ -427,15 +427,19 @@ webhooks.post('/stripe', async (c) => {
 
         // Check if this is a reactivation
         const existingSub = await Subscription.findOne({ userId: user._id }).lean();
-        const isReactivation = existingSub && existingSub.status !== 'active' && subscription.status === 'active';
+        const isReactivation = existingSub && existingSub.status !== 'active' && (subscription.status === 'active' || subscription.status === 'trialing');
 
         // Cancel old subscriptions when switching plans
         if (existingSub?.stripeSubscriptionId && existingSub.stripeSubscriptionId !== subscriptionId) {
           await SubscriptionService.cancelOldStripeSubscriptions(userId, subscriptionId);
         }
 
-        // Handle different subscription statuses
-        if (subscription.status === 'active') {
+        // Check if subscription is in trial
+        const isTrialing = subscription.status === 'trialing';
+        const trialEnd = subscription.trial_end ? new Date(subscription.trial_end * 1000) : null;
+
+        // Handle different subscription statuses (active or trialing both grant access)
+        if (subscription.status === 'active' || subscription.status === 'trialing') {
           const plan = getSubscriptionPlan(tier);
 
           await SubscriptionService.createSubscription(userId, {
@@ -448,13 +452,13 @@ webhooks.post('/stripe', async (c) => {
             bonusTokens: 0,
           });
 
-          // Update period start
+          // Update period start (and trial end if applicable)
           await Subscription.findOneAndUpdate(
             { userId: user._id },
             { $set: { currentPeriodStart: periodStart } }
           );
 
-          console.log(`✅ Subscription active for ${resolvedEmail}: ${tier} (${billingInterval})`);
+          console.log(`✅ Subscription ${isTrialing ? 'trialing' : 'active'} for ${resolvedEmail}: ${tier} (${billingInterval})${isTrialing && trialEnd ? ` - trial ends ${trialEnd.toISOString()}` : ''}`);
 
           // Send appropriate email
           const displayPrice = billingInterval === 'yearly' ? plan.yearlyPrice : plan.price;

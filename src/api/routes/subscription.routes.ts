@@ -132,7 +132,7 @@ subscription.post('/checkout', async (c) => {
     const successUrl = redirectUrl || env.STRIPE_SUCCESS_URL || 'https://answer.convitsa.com/subscription?success=true';
     const cancelUrl = env.STRIPE_CANCEL_URL || 'https://answer.convitsa.com/subscription?cancelled=true';
 
-    // Create Stripe Checkout session
+    // Create Stripe Checkout session with 14-day free trial
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       customer_email: user.email,
@@ -150,6 +150,7 @@ subscription.post('/checkout', async (c) => {
         billing_interval: billingInterval,
       },
       subscription_data: {
+        trial_period_days: 14,
         metadata: {
           user_id: user.userId,
           user_email: user.email,
@@ -161,12 +162,13 @@ subscription.post('/checkout', async (c) => {
     const checkoutUrl = session.url;
     const plan = getSubscriptionPlan(tier);
 
-    console.log(`🛒 Generated Stripe checkout URL for ${user.email}: ${tier} (${billingInterval})`);
+    console.log(`🛒 Generated Stripe checkout URL for ${user.email}: ${tier} (${billingInterval}) with 14-day trial`);
 
     return c.json({
       checkoutUrl,
       tier,
       billingInterval,
+      trialDays: 14,
       plan: {
         ...plan,
         price: billingInterval === 'yearly' ? plan.yearlyPrice : plan.price,
