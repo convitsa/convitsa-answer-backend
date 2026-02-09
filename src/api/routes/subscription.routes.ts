@@ -182,6 +182,7 @@ subscription.post('/checkout', async (c) => {
       ],
       success_url: successUrl,
       cancel_url: cancelUrl,
+      allow_promotion_codes: true, // Allow users to enter promo codes
       metadata: {
         user_id: user.userId,
         user_email: user.email,
