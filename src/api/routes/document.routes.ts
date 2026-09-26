@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { Types } from 'mongoose';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { ProjectService } from '../../services/project.service';
-import { BlobService, SUPPORTED_MIME_TYPES } from '../../services/blob.service';
+import { StorageService, SUPPORTED_MIME_TYPES } from '../../services/storage.service';
 import { DocumentQueueService } from '../../services/document-queue.service';
 import { DocumentWorker } from '../../workers/document.worker';
 import { DocumentModel, DocumentChunk } from '../../db/schemas';
@@ -70,8 +70,8 @@ documents.post('/:projectId/documents', async (c) => {
     return c.json({ error: projectResult.error, code: projectResult.code }, status);
   }
 
-  // Check if blob service is initialized
-  if (!BlobService.isInitialized()) {
+  // Check if storage service is initialized
+  if (!StorageService.isInitialized()) {
     return c.json(
       { error: 'File upload service not available', code: 'SERVICE_UNAVAILABLE' },
       503
@@ -133,7 +133,7 @@ documents.post('/:projectId/documents', async (c) => {
   for (const file of files) {
     try {
       // Validate file type and size
-      const validation = BlobService.validateFile(file.type, file.size);
+      const validation = StorageService.validateFile(file.type, file.size);
       if (!validation.valid) {
         results.push({
           fileName: file.name,
@@ -143,8 +143,8 @@ documents.post('/:projectId/documents', async (c) => {
         continue;
       }
 
-      // Upload to blob storage
-      const { fileName, blobUrl } = await BlobService.uploadFile(
+      // Upload to local storage
+      const { fileName, blobUrl } = await StorageService.uploadFile(
         projectId,
         file,
         file.name,

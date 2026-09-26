@@ -5,8 +5,7 @@ const pdfParse = require('pdf-parse');
 import * as XLSX from 'xlsx';
 import officeParser from 'officeparser';
 import * as cheerio from 'cheerio';
-import { env } from '../config/env';
-import { BlobService } from './blob.service';
+import { StorageService } from './storage.service';
 
 interface ExtractedContent {
   text: string;
@@ -26,7 +25,7 @@ export class FileProcessorService {
     mimeType: string,
     blobUrl?: string
   ): Promise<ExtractedContent> {
-    const category = BlobService.getFileCategory(mimeType);
+    const category = StorageService.getFileCategory(mimeType);
 
     switch (category) {
       case 'document':
@@ -183,71 +182,15 @@ export class FileProcessorService {
   }
 
   /**
-   * Extract text from images using Azure Computer Vision OCR
+   * Images are stored as-is; no OCR/text extraction is performed on them,
+   * so they never contribute chunks/embeddings to the RAG knowledge base.
    */
   private static async extractImageText(
-    buffer: Buffer,
-    mimeType: string,
-    blobUrl?: string
+    _buffer: Buffer,
+    _mimeType: string,
+    _blobUrl?: string
   ): Promise<ExtractedContent> {
-    try {
-      const endpoint = env.AZURE_VISION_ENDPOINT;
-      const key = env.AZURE_VISION_KEY;
-      
-      // Use the Read API for OCR
-      const analyzeUrl = `${endpoint}/computervision/imageanalysis:analyze?api-version=2023-10-01&features=read`;
-      
-      // Convert Buffer to Uint8Array for fetch body
-      const body = new Uint8Array(buffer);
-      
-      const response = await fetch(analyzeUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': mimeType,
-          'Ocp-Apim-Subscription-Key': key,
-        },
-        body,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Azure Vision API error:', response.status, errorText);
-        // Return empty text instead of throwing - image might just have no text
-        console.log('Azure Vision API failed, returning empty text');
-        return { text: '' };
-      }
-
-      const result = await response.json() as {
-        readResult?: {
-          blocks?: Array<{
-            lines?: Array<{
-              text?: string;
-            }>;
-          }>;
-        };
-      };
-      
-      // Extract text from the read result
-      const textLines: string[] = [];
-      if (result.readResult?.blocks) {
-        for (const block of result.readResult.blocks) {
-          if (block.lines) {
-            for (const line of block.lines) {
-              if (line.text) {
-                textLines.push(line.text);
-              }
-            }
-          }
-        }
-      }
-
-      console.log(`  🖼️ OCR found ${textLines.length} lines of text`);
-      return { text: textLines.join('\n') };
-    } catch (error) {
-      console.error('Image OCR extraction error:', error);
-      // Return empty text instead of failing - allows graceful handling
-      return { text: '' };
-    }
+    return { text: '' };
   }
 
   /**

@@ -11,12 +11,10 @@ const envSchema = z.object({
   // Redis
   REDIS_URL: z.string().default('redis://localhost:6379'),
 
-  // Azure OpenAI
-  AZURE_OPENAI_ENDPOINT: z.string().url('AZURE_OPENAI_ENDPOINT must be a valid URL'),
-  AZURE_OPENAI_API_KEY: z.string().min(1, 'AZURE_OPENAI_API_KEY is required'),
-  AZURE_OPENAI_API_VERSION: z.string().default('2024-02-15-preview'),
-  AZURE_OPENAI_CHAT_DEPLOYMENT: z.string().min(1, 'AZURE_OPENAI_CHAT_DEPLOYMENT is required'),
-  AZURE_OPENAI_EMBEDDING_DEPLOYMENT: z.string().min(1, 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT is required'),
+  // Gemini (Google AI)
+  GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
+  GEMINI_CHAT_MODEL: z.string().default('gemini-2.5-flash'),
+  GEMINI_EMBEDDING_MODEL: z.string().default('gemini-embedding-001'),
 
   // Firecrawl
   FIRECRAWL_API_KEY: z.string().min(1, 'FIRECRAWL_API_KEY is required'),
@@ -56,13 +54,9 @@ const envSchema = z.object({
   CRAWL_MAX_PAGES: z.string().default('20').transform(Number),
   CRAWL_TIMEOUT_SECONDS: z.string().default('120').transform(Number),
 
-  // Azure Blob Storage
-  AZURE_BLOB_CONNECTION_STRING: z.string().min(1, 'AZURE_BLOB_CONNECTION_STRING is required'),
-  AZURE_BLOB_CONTAINER_NAME: z.string().default('convitsa-documents'),
-
-  // Azure Computer Vision (for OCR)
-  AZURE_VISION_ENDPOINT: z.string().url('AZURE_VISION_ENDPOINT must be a valid URL'),
-  AZURE_VISION_KEY: z.string().min(1, 'AZURE_VISION_KEY is required'),
+  // Local file storage (replaces Azure Blob Storage)
+  STORAGE_PATH: z.string().default('/app/uploads'),
+  PUBLIC_BASE_URL: z.string().url('PUBLIC_BASE_URL must be a valid URL').default('http://localhost:3000'),
 
   // Document Upload Configuration
   MAX_FILE_SIZE_MB: z.string().default('50').transform(Number),

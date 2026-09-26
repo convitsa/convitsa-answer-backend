@@ -1,16 +1,14 @@
-import { AzureOpenAI } from 'openai';
+import { GoogleGenAI } from '@google/genai';
 import { env } from '../config/env';
 
-// Initialize Azure OpenAI client for embeddings
-const client = new AzureOpenAI({
-  endpoint: env.AZURE_OPENAI_ENDPOINT,
-  apiKey: env.AZURE_OPENAI_API_KEY,
-  apiVersion:"2024-02-01"
-});
+// Initialize Gemini client for embeddings
+const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
-// text-embedding-3-large produces 3072-dimensional vectors
+// Matches the dimensionality of the existing MongoDB Atlas vector search
+// indexes (vector_index / document_vector_index), so no index changes are
+// needed when switching providers - only the stored vector values change.
 const EMBEDDING_DIMENSIONS = 3072;
-const MAX_BATCH_SIZE = 16; // Azure limit
+const MAX_BATCH_SIZE = 16;
 
 export class EmbeddingService {
   /**
@@ -18,12 +16,17 @@ export class EmbeddingService {
    */
   static async generateEmbedding(text: string): Promise<number[]> {
     try {
-      const response = await client.embeddings.create({
-        model: env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
-        input: text.slice(0, 8000), // Limit input length
+      const response = await ai.models.embedContent({
+        model: env.GEMINI_EMBEDDING_MODEL,
+        contents: text.slice(0, 8000),
+        config: { outputDimensionality: EMBEDDING_DIMENSIONS },
       });
 
-      return response.data[0].embedding;
+      const embedding = response.embeddings?.[0]?.values;
+      if (!embedding) {
+        throw new Error('No embedding returned');
+      }
+      return embedding;
     } catch (error) {
       console.error('Embedding generation error:', error);
       throw new Error('Failed to generate embedding');
@@ -47,15 +50,18 @@ export class EmbeddingService {
       const batchStartTime = Date.now();
 
       try {
-        const response = await client.embeddings.create({
-          model: env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
-          input: truncatedBatch,
+        const response = await ai.models.embedContent({
+          model: env.GEMINI_EMBEDDING_MODEL,
+          contents: truncatedBatch,
+          config: { outputDimensionality: EMBEDDING_DIMENSIONS },
         });
 
-        // Sort by index to maintain order
-        const sortedData = response.data.sort((a, b) => a.index - b.index);
-        embeddings.push(...sortedData.map((d) => d.embedding));
-        
+        const batchEmbeddings = response.embeddings?.map((e) => e.values || []) || [];
+        if (batchEmbeddings.length !== batch.length) {
+          throw new Error(`Expected ${batch.length} embeddings, got ${batchEmbeddings.length}`);
+        }
+        embeddings.push(...batchEmbeddings);
+
         const batchDuration = ((Date.now() - batchStartTime) / 1000).toFixed(2);
         console.log(`         ✅ Batch ${batchNum}/${totalBatches} completed in ${batchDuration}s`);
       } catch (error) {
@@ -98,4 +104,3 @@ export class EmbeddingService {
     return magnitude === 0 ? 0 : dotProduct / magnitude;
   }
 }
-

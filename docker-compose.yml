@@ -1,0 +1,21 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${CONTAINER_NAME:-convitsa-backend}
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ${UPLOADS_PATH:-/opt/convitsa/uploads}:/app/uploads
+    networks:
+      - convitsa-net    # backend <-> redis
+      - shared-proxy    # reachable from the VM's existing nginx (examigrade_nginx)
+
+networks:
+  convitsa-net:
+    external: true
+  shared-proxy:
+    name: root_default
+    external: true

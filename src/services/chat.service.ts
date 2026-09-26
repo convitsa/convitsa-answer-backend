@@ -1,13 +1,9 @@
-import { AzureOpenAI } from 'openai';
+import { GoogleGenAI } from '@google/genai';
 import { env, getTierConfig } from '../config/env';
 import type { ChatTier } from '../types';
 
-// Initialize Azure OpenAI client for chat
-const client = new AzureOpenAI({
-  endpoint: env.AZURE_OPENAI_ENDPOINT,
-  apiKey: env.AZURE_OPENAI_API_KEY,
-  apiVersion: '2024-08-01-preview',
-});
+// Initialize Gemini client for chat
+const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
 export interface TokenUsage {
   promptTokens: number;      // Input tokens (user message + context)
@@ -21,25 +17,52 @@ export interface StreamCallbacks {
   onError: (error: Error) => void;
 }
 
+type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+
+/**
+ * Split an OpenAI-style message array into a Gemini system instruction + contents.
+ * Keeps the rest of the codebase (RAGService, chat handler) unaware of the provider.
+ */
+function toGeminiRequest(messages: ChatMessage[]): {
+  systemInstruction?: string;
+  contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
+} {
+  const systemMessages = messages.filter((m) => m.role === 'system').map((m) => m.content);
+  const contents = messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => ({
+      role: m.role === 'assistant' ? ('model' as const) : ('user' as const),
+      parts: [{ text: m.content }],
+    }));
+
+  return {
+    systemInstruction: systemMessages.length > 0 ? systemMessages.join('\n\n') : undefined,
+    contents,
+  };
+}
+
 export class ChatService {
   /**
    * Generate chat completion with streaming
    */
   static async streamCompletion(
-    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+    messages: ChatMessage[],
     tier: ChatTier,
     callbacks: StreamCallbacks
   ): Promise<void> {
     const config = getTierConfig(tier);
+    const { systemInstruction, contents } = toGeminiRequest(messages);
 
     try {
-      const stream = await client.chat.completions.create({
-        model: env.AZURE_OPENAI_CHAT_DEPLOYMENT,
-        messages,
-        max_tokens: config.maxTokens,
-        temperature: 0.7,
-        stream: true,
-        stream_options: { include_usage: true },
+      const stream = await ai.models.generateContentStream({
+        model: env.GEMINI_CHAT_MODEL,
+        contents,
+        config: {
+          systemInstruction,
+          maxOutputTokens: config.maxTokens,
+          temperature: 0.7,
+          responseMimeType: 'application/json',
+        },
       });
 
       let usage: TokenUsage = {
@@ -49,18 +72,16 @@ export class ChatService {
       };
 
       for await (const chunk of stream) {
-        // Check for content
-        const delta = chunk.choices[0]?.delta;
-        if (delta?.content) {
-          callbacks.onChunk(delta.content);
+        const text = chunk.text;
+        if (text) {
+          callbacks.onChunk(text);
         }
 
-        // Check for usage (comes at the end when stream_options.include_usage is true)
-        if (chunk.usage) {
+        if (chunk.usageMetadata) {
           usage = {
-            promptTokens: chunk.usage.prompt_tokens,
-            completionTokens: chunk.usage.completion_tokens,
-            totalTokens: chunk.usage.total_tokens,
+            promptTokens: chunk.usageMetadata.promptTokenCount ?? 0,
+            completionTokens: chunk.usageMetadata.candidatesTokenCount ?? 0,
+            totalTokens: chunk.usageMetadata.totalTokenCount ?? 0,
           };
         }
       }
@@ -76,22 +97,26 @@ export class ChatService {
    * Generate non-streaming completion (for simple responses)
    */
   static async generateCompletion(
-    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+    messages: ChatMessage[],
     tier: ChatTier
   ): Promise<{ content: string; tokens: number }> {
     const config = getTierConfig(tier);
+    const { systemInstruction, contents } = toGeminiRequest(messages);
 
     try {
-      const response = await client.chat.completions.create({
-        model: env.AZURE_OPENAI_CHAT_DEPLOYMENT,
-        messages,
-        max_tokens: config.maxTokens,
-        temperature: 0.7,
+      const response = await ai.models.generateContent({
+        model: env.GEMINI_CHAT_MODEL,
+        contents,
+        config: {
+          systemInstruction,
+          maxOutputTokens: config.maxTokens,
+          temperature: 0.7,
+        },
       });
 
       return {
-        content: response.choices[0]?.message?.content || '',
-        tokens: response.usage?.total_tokens || 0,
+        content: response.text || '',
+        tokens: response.usageMetadata?.totalTokenCount || 0,
       };
     } catch (error) {
       console.error('Chat completion error:', error);
@@ -122,11 +147,9 @@ export class ChatService {
 
   /**
    * Estimate token count for messages (rough estimate)
-   * More accurate counting would use tiktoken
    */
   static estimateTokens(text: string): number {
     // Rough estimate: ~4 characters per token
     return Math.ceil(text.length / 4);
   }
 }
-

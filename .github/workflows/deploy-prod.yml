@@ -11,24 +11,16 @@ on:
         type: string
 
 env:
-  ACR_NAME: "convitsaacrprod"
-  RESOURCE_GROUP: "Convitsa-Production"
-  APP_NAME: "convitsa-answer-backend-prod"
-  IMAGE_NAME: "convitsa-answer-backend-prod"
   ENVIRONMENT: "production"
+  DEPLOY_PATH: "/opt/convitsa/backend-prod"
+  COMPOSE_PROJECT_NAME: "convitsa-backend-prod"
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
     environment: production
-    permissions:
-      contents: read
-      id-token: write
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Get version
         id: version
         run: |
@@ -40,100 +32,27 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "📦 Deploying version: $VERSION"
 
-      - name: Azure Login
-        uses: azure/login@v2
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: ACR Login
-        run: az acr login --name ${{ env.ACR_NAME }}
-
-      - name: Define image tag
-        id: names
-        run: |
-          echo "image_tag=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> "$GITHUB_OUTPUT"
-          echo "latest_tag=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest" >> "$GITHUB_OUTPUT"
-
-      - name: Build Docker Image
-        run: |
-          docker build \
-            --build-arg NODE_ENV="production" \
-            --build-arg PORT="${{ vars.PORT || '3000' }}" \
-            --build-arg MONGODB_URI="${{ secrets.MONGODB_URI }}" \
-            --build-arg REDIS_URL="${{ secrets.REDIS_URL }}" \
-            --build-arg AZURE_OPENAI_ENDPOINT="${{ vars.AZURE_OPENAI_ENDPOINT }}" \
-            --build-arg AZURE_OPENAI_API_KEY="${{ secrets.AZURE_OPENAI_API_KEY }}" \
-            --build-arg AZURE_OPENAI_API_VERSION="${{ secrets.AZURE_OPENAI_API_VERSION }}" \
-            --build-arg AZURE_OPENAI_CHAT_DEPLOYMENT="${{ secrets.AZURE_OPENAI_CHAT_DEPLOYMENT }}" \
-            --build-arg AZURE_OPENAI_EMBEDDING_DEPLOYMENT="${{ secrets.AZURE_OPENAI_EMBEDDING_DEPLOYMENT }}" \
-            --build-arg AZURE_BLOB_CONNECTION_STRING="${{ secrets.AZURE_BLOB_CONNECTION_STRING }}" \
-            --build-arg AZURE_BLOB_CONTAINER_NAME="${{ secrets.AZURE_BLOB_CONTAINER_NAME }}" \
-            --build-arg AZURE_VISION_ENDPOINT="${{ secrets.AZURE_VISION_ENDPOINT }}" \
-            --build-arg AZURE_VISION_KEY="${{ secrets.AZURE_VISION_KEY }}" \
-            --build-arg FIRECRAWL_API_KEY="${{ secrets.FIRECRAWL_API_KEY }}" \
-            --build-arg CRAWL_MAX_PAGES="${{ secrets.CRAWL_MAX_PAGES }}" \
-            --build-arg CRAWL_TIMEOUT_SECONDS="${{ secrets.CRAWL_TIMEOUT_SECONDS }}" \
-            --build-arg RESEND_API_KEY="${{ secrets.RESEND_API_KEY }}" \
-            --build-arg RESEND_FROM_EMAIL="${{ secrets.RESEND_FROM_EMAIL }}" \
-            --build-arg JWT_SECRET="${{ secrets.JWT_SECRET }}" \
-            --build-arg JWT_REFRESH_SECRET="${{ secrets.JWT_REFRESH_SECRET }}" \
-            --build-arg JWT_EXPIRES_IN="${{ secrets.JWT_EXPIRES_IN }}" \
-            --build-arg JWT_REFRESH_EXPIRES_IN="${{ secrets.JWT_REFRESH_EXPIRES_IN }}" \
-            --build-arg MAX_FILE_SIZE_MB="${{ secrets.MAX_FILE_SIZE_MB }}" \
-            --build-arg MAX_FILES_PER_PROJECT="${{ secrets.MAX_FILES_PER_PROJECT }}" \
-            --build-arg MAX_STORAGE_PER_PROJECT_MB="${{ secrets.MAX_STORAGE_PER_PROJECT_MB }}" \
-            --build-arg GUMROAD_SELLER_ID="${{ secrets.GUMROAD_SELLER_ID }}" \
-            --build-arg GUMROAD_WEBHOOK_TOKEN="${{ secrets.GUMROAD_WEBHOOK_TOKEN }}" \
-            --build-arg MAX_WS_CONNECTIONS_PER_KEY="${{ secrets.MAX_WS_CONNECTIONS_PER_KEY }}" \
-            --build-arg TOKENS_PER_CREDIT="${{ vars.TOKENS_PER_CREDIT }}" \
-            --build-arg PLATFORM_COMMISSION_PERCENT="${{ vars.PLATFORM_COMMISSION_PERCENT }}" \
-            --build-arg OPENAI_TO_CONVITSA_RATE="${{ vars.OPENAI_TO_CONVITSA_RATE }}" \
-            --build-arg FREE_CONTEXT_CHUNKS="${{ secrets.FREE_CONTEXT_CHUNKS }}" \
-            --build-arg PRO_CONTEXT_CHUNKS="${{ secrets.PRO_CONTEXT_CHUNKS }}" \
-            --build-arg FREE_MAX_TOKENS="${{ secrets.FREE_MAX_TOKENS }}" \
-            --build-arg PRO_MAX_TOKENS="${{ secrets.PRO_MAX_TOKENS }}" \
-            --build-arg FREE_MAX_MESSAGES_PER_SESSION="${{ secrets.FREE_MAX_MESSAGES_PER_SESSION }}" \
-            --build-arg RATE_LIMIT_FREE_MESSAGES_PER_MIN="${{ secrets.RATE_LIMIT_FREE_MESSAGES_PER_MIN }}" \
-            --build-arg RATE_LIMIT_PRO_MESSAGES_PER_MIN="${{ secrets.RATE_LIMIT_PRO_MESSAGES_PER_MIN }}" \
-            --build-arg STRIPE_SECRET_KEY="${{ secrets.STRIPE_SECRET_KEY }}" \
-            --build-arg STRIPE_WEBHOOK_SECRET="${{ secrets.STRIPE_WEBHOOK_SECRET }}" \
-            --build-arg STRIPE_SUCCESS_URL="${{ vars.STRIPE_SUCCESS_URL }}" \
-            --build-arg STRIPE_CANCEL_URL="${{ vars.STRIPE_CANCEL_URL }}" \
-            --build-arg STRIPE_PRO_PRICE_ID="${{ vars.STRIPE_PRO_PRICE_ID }}" \
-            --build-arg STRIPE_BUSINESS_PRICE_ID="${{ vars.STRIPE_BUSINESS_PRICE_ID }}" \
-            --build-arg STRIPE_PRO_YEARLY_PRICE_ID="${{ vars.STRIPE_PRO_YEARLY_PRICE_ID }}" \
-            --build-arg STRIPE_BUSINESS_YEARLY_PRICE_ID="${{ vars.STRIPE_BUSINESS_YEARLY_PRICE_ID }}" \
-            --build-arg FREE_TOKENS_PER_MONTH="${{ vars.FREE_TOKENS_PER_MONTH }}" \
-            --build-arg PRO_TOKENS_PER_MONTH="${{ vars.PRO_TOKENS_PER_MONTH }}" \
-            --build-arg BUSINESS_TOKENS_PER_MONTH="${{ vars.BUSINESS_TOKENS_PER_MONTH }}" \
-            --build-arg FREE_PROJECTS_LIMIT="${{ vars.FREE_PROJECTS_LIMIT }}" \
-            --build-arg PRO_PROJECTS_LIMIT="${{ vars.PRO_PROJECTS_LIMIT }}" \
-            --build-arg BUSINESS_PROJECTS_LIMIT="${{ vars.BUSINESS_PROJECTS_LIMIT }}" \
-            -t ${{ steps.names.outputs.image_tag }} \
-            -f Dockerfile .
-
-      - name: Push Docker Image
-        run: |
-          docker push ${{ steps.names.outputs.image_tag }}
-          docker tag ${{ steps.names.outputs.image_tag }} ${{ steps.names.outputs.latest_tag }}
-          docker push ${{ steps.names.outputs.latest_tag }}
-
-      - name: Deploy to Azure Web App (container)
-        uses: azure/webapps-deploy@v2
-        with:
-          app-name: ${{ env.APP_NAME }}
-          images: "${{ steps.names.outputs.image_tag }}"
+          host: ${{ secrets.VM_SSH_HOST }}
+          username: ${{ secrets.VM_SSH_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
+            set -e
+            cd ${{ env.DEPLOY_PATH }}
+            git fetch --tags origin
+            git checkout ${{ steps.version.outputs.version }}
+            COMPOSE_PROJECT_NAME=${{ env.COMPOSE_PROJECT_NAME }} docker compose up -d --build
+            docker image prune -f
 
       - name: Deployment Summary
         run: |
           echo "## 🚀 Production Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **App Name:** ${{ env.APP_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image:** ${{ steps.names.outputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment:** ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           if [ "${{ github.event_name }}" = "release" ]; then
             echo "- **Release:** [${{ github.event.release.name }}](${{ github.event.release.html_url }})" >> $GITHUB_STEP_SUMMARY
           fi
-

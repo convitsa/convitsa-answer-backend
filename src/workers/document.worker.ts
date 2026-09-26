@@ -1,7 +1,7 @@
 import { Types } from 'mongoose';
 import { DocumentModel, DocumentChunk, Project, User } from '../db/schemas';
 import { DocumentQueueService } from '../services/document-queue.service';
-import { BlobService } from '../services/blob.service';
+import { StorageService } from '../services/storage.service';
 import { FileProcessorService } from '../services/file-processor.service';
 import { EmbeddingService } from '../services/embedding.service';
 import { RAGService } from '../services/rag.service';
@@ -79,9 +79,9 @@ export class DocumentWorker {
         { $set: { status: 'processing' } }
       );
 
-      // Step 1: Download file from blob storage
-      console.log(`  📥 Downloading from blob storage...`);
-      const fileBuffer = await BlobService.downloadFile(fileName);
+      // Step 1: Download file from local storage
+      console.log(`  📥 Reading file from local storage...`);
+      const fileBuffer = await StorageService.downloadFile(fileName);
       console.log(`  ✅ Downloaded ${fileBuffer.length} bytes`);
 
       // Step 2: Extract text content
@@ -103,7 +103,7 @@ export class DocumentWorker {
             {
               $set: {
                 status: 'completed',
-                extractedText: `[Image file: ${doc?.originalName || fileName}] - No text content detected via OCR.`,
+                extractedText: `[Image file: ${doc?.originalName || fileName}] - Images are stored without text extraction.`,
                 chunkCount: 0,
                 processedAt: new Date(),
               },
@@ -253,11 +253,11 @@ export class DocumentWorker {
       throw new Error('Document not found');
     }
 
-    // Delete from blob storage
+    // Delete from local storage
     try {
-      await BlobService.deleteFile(doc.fileName);
+      await StorageService.deleteFile(doc.fileName);
     } catch (error) {
-      console.warn(`Failed to delete blob: ${doc.fileName}`, error);
+      console.warn(`Failed to delete file: ${doc.fileName}`, error);
     }
 
     // Delete chunks
@@ -278,8 +278,8 @@ export class DocumentWorker {
   static async deleteProjectDocuments(projectId: string): Promise<number> {
     const docs = await DocumentModel.find({ projectId: new Types.ObjectId(projectId) }).lean();
     
-    // Delete from blob storage
-    await BlobService.deleteProjectFiles(projectId);
+    // Delete from local storage
+    await StorageService.deleteProjectFiles(projectId);
 
     // Delete all chunks
     await DocumentChunk.deleteMany({ projectId: new Types.ObjectId(projectId) });

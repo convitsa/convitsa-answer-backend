@@ -7,7 +7,7 @@ import { connectRedis } from './db/redis';
 import { api } from './api/routes';
 import { securityHeaders, errorHandler, requestSizeLimit } from './api/middleware/security.middleware';
 import { ApiKeyService } from './services/project.service';
-import { BlobService } from './services/blob.service';
+import { StorageService } from './services/storage.service';
 import { DocumentWorker } from './workers/document.worker';
 import { ChatSession, Project, ChatMessage, Lead } from './db/schemas';
 import { SubscriptionService } from './services/subscription.service';
@@ -73,11 +73,11 @@ async function startServer() {
     await connectMongoDB();
     await connectRedis();
 
-    // Initialize Azure Blob Storage
+    // Initialize local file storage
     try {
-      await BlobService.initialize();
+      await StorageService.initialize();
     } catch (error) {
-      console.warn('⚠️ Azure Blob Storage not configured - file uploads disabled');
+      console.warn('⚠️ Local file storage not available - file uploads disabled');
     }
 
     // Start document processing worker in background
