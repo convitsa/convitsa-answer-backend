@@ -13,7 +13,7 @@ const envSchema = z.object({
 
   // Gemini (Google AI)
   GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
-  GEMINI_CHAT_MODEL: z.string().default('gemini-2.5-flash'),
+  GEMINI_CHAT_MODEL: z.string().default('gemini-3.8-flash'),
   GEMINI_EMBEDDING_MODEL: z.string().default('gemini-embedding-001'),
 
   // Firecrawl
@@ -44,7 +44,7 @@ const envSchema = z.object({
   // Pricing Configuration
   TOKENS_PER_CREDIT: z.string().default('1000').transform(Number),
   PLATFORM_COMMISSION_PERCENT: z.string().default('25').transform(Number), // 25% commission
-  
+
   // Token Conversion: How many OpenAI tokens = 1 Convitsa token
   // Default: 30 OpenAI tokens = 1 Convitsa token (optimized for 60% profit margin)
   // So a message using 2500 OpenAI tokens = ~83 Convitsa tokens
@@ -232,7 +232,7 @@ export function getTierFromPriceId(priceId: string): { tier: 'free' | 'pro' | 'b
   if (priceId === env.STRIPE_BUSINESS_PRICE_ID) {
     return { tier: 'business', billingInterval: 'monthly' };
   }
-  
+
   // Yearly prices
   if (priceId === env.STRIPE_PRO_YEARLY_PRICE_ID) {
     return { tier: 'pro', billingInterval: 'yearly' };
@@ -240,7 +240,7 @@ export function getTierFromPriceId(priceId: string): { tier: 'free' | 'pro' | 'b
   if (priceId === env.STRIPE_BUSINESS_YEARLY_PRICE_ID) {
     return { tier: 'business', billingInterval: 'yearly' };
   }
-  
+
   // Default to free
   return { tier: 'free', billingInterval: 'monthly' };
 }

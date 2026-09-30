@@ -46,7 +46,7 @@ jobs:
           REDIS_URL=${{ vars.REDIS_URL }}
 
           GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
-          GEMINI_CHAT_MODEL=${{ vars.GEMINI_CHAT_MODEL || 'gemini-2.5-flash' }}
+          GEMINI_CHAT_MODEL=${{ vars.GEMINI_CHAT_MODEL || 'gemini-3.8-flash' }}
           GEMINI_EMBEDDING_MODEL=${{ vars.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001' }}
 
           STORAGE_PATH=/app/uploads
