@@ -13,7 +13,7 @@ const envSchema = z.object({
 
   // Gemini (Google AI)
   GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
-  GEMINI_CHAT_MODEL: z.string().default('gemini-3.8-flash'),
+  GEMINI_CHAT_MODEL: z.string().default('gemini-2.5-flash'),
   GEMINI_EMBEDDING_MODEL: z.string().default('gemini-embedding-001'),
 
   // Firecrawl
