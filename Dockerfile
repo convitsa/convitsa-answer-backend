@@ -28,12 +28,15 @@ COPY . .
 # Typecheck (no build output - Bun runs the TS source directly at runtime)
 RUN bun run build
 
-# Copy NGINX configuration
-RUN mkdir -p /etc/nginx/sites-available \
-    && mkdir -p /etc/nginx/sites-enabled \
-    && ln -s /etc/nginx/sites-available/app.conf /etc/nginx/sites-enabled/
+# Copy NGINX configuration (remove Debian's stock default site first - it
+# also binds server_name "_" on port 80 and will silently win over app.conf
+# otherwise, serving the default "Welcome to nginx!" page instead of the app)
+RUN mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled \
+    && rm -f /etc/nginx/sites-enabled/default \
+    && rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
 
 COPY nginx.conf /etc/nginx/sites-available/app.conf
+RUN ln -sf /etc/nginx/sites-available/app.conf /etc/nginx/sites-enabled/app.conf
 
 # Directory for locally-stored uploads (mount a host volume here for persistence)
 RUN mkdir -p /app/uploads
