@@ -45,8 +45,10 @@ jobs:
           MONGODB_URI=${{ secrets.MONGODB_URI }}
           REDIS_URL=${{ vars.REDIS_URL }}
 
+          DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_CHAT_MODEL=${{ vars.DEEPSEEK_CHAT_MODEL || 'deepseek-flash' }}
+
           GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
-          GEMINI_CHAT_MODEL=${{ vars.GEMINI_CHAT_MODEL || 'gemini-2.5-flash' }}
           GEMINI_EMBEDDING_MODEL=${{ vars.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001' }}
 
           STORAGE_PATH=/app/uploads

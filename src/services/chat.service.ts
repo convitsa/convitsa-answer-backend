@@ -1,9 +1,13 @@
-import { GoogleGenAI } from '@google/genai';
+import OpenAI from 'openai';
 import { env, getTierConfig } from '../config/env';
 import type { ChatTier } from '../types';
 
-// Initialize Gemini client for chat
-const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
+// DeepSeek exposes an OpenAI-compatible API, so the standard OpenAI SDK works
+// by just pointing it at DeepSeek's base URL.
+const client = new OpenAI({
+  apiKey: env.DEEPSEEK_API_KEY,
+  baseURL: env.DEEPSEEK_BASE_URL,
+});
 
 export interface TokenUsage {
   promptTokens: number;      // Input tokens (user message + context)
@@ -19,27 +23,16 @@ export interface StreamCallbacks {
 
 type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
-/**
- * Split an OpenAI-style message array into a Gemini system instruction + contents.
- * Keeps the rest of the codebase (RAGService, chat handler) unaware of the provider.
- */
-function toGeminiRequest(messages: ChatMessage[]): {
-  systemInstruction?: string;
-  contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
-} {
-  const systemMessages = messages.filter((m) => m.role === 'system').map((m) => m.content);
-  const contents = messages
-    .filter((m) => m.role !== 'system')
-    .map((m) => ({
-      role: m.role === 'assistant' ? ('model' as const) : ('user' as const),
-      parts: [{ text: m.content }],
-    }));
+// DeepSeek enables "thinking" by default, which bills reasoning tokens as
+// output and ignores temperature. This is a short customer-support chat, so
+// thinking is disabled. `thinking` is a DeepSeek-specific body field the
+// OpenAI SDK's types don't know about, but the SDK forwards it as-is.
+const deepseekExtras = { thinking: { type: 'disabled' } };
 
-  return {
-    systemInstruction: systemMessages.length > 0 ? systemMessages.join('\n\n') : undefined,
-    contents,
-  };
-}
+// DeepSeek's docs warn that JSON-mode responses may occasionally come back
+// empty. Nothing has been streamed to the caller yet in that case, so retrying
+// once is safe.
+const MAX_ATTEMPTS = 2;
 
 export class ChatService {
   /**
@@ -51,42 +44,59 @@ export class ChatService {
     callbacks: StreamCallbacks
   ): Promise<void> {
     const config = getTierConfig(tier);
-    const { systemInstruction, contents } = toGeminiRequest(messages);
 
     try {
-      const stream = await ai.models.generateContentStream({
-        model: env.GEMINI_CHAT_MODEL,
-        contents,
-        config: {
-          systemInstruction,
-          maxOutputTokens: config.maxTokens,
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const stream = await client.chat.completions.create({
+          model: env.DEEPSEEK_CHAT_MODEL,
+          messages,
+          max_tokens: config.maxTokens,
           temperature: 0.7,
-          responseMimeType: 'application/json',
-        },
-      });
+          stream: true,
+          stream_options: { include_usage: true },
+          response_format: { type: 'json_object' },
+          ...deepseekExtras,
+        } as OpenAI.Chat.ChatCompletionCreateParamsStreaming);
 
-      let usage: TokenUsage = {
-        promptTokens: 0,
-        completionTokens: 0,
-        totalTokens: 0,
-      };
+        let usage: TokenUsage = {
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+        };
+        let output = '';
 
-      for await (const chunk of stream) {
-        const text = chunk.text;
-        if (text) {
-          callbacks.onChunk(text);
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta;
+          if (delta?.content) {
+            output += delta.content;
+            callbacks.onChunk(delta.content);
+          }
+
+          // Usage arrives in the final chunk when include_usage is set
+          if (chunk.usage) {
+            usage = {
+              promptTokens: chunk.usage.prompt_tokens,
+              completionTokens: chunk.usage.completion_tokens,
+              totalTokens: chunk.usage.total_tokens,
+            };
+          }
         }
 
-        if (chunk.usageMetadata) {
-          usage = {
-            promptTokens: chunk.usageMetadata.promptTokenCount ?? 0,
-            completionTokens: chunk.usageMetadata.candidatesTokenCount ?? 0,
-            totalTokens: chunk.usageMetadata.totalTokenCount ?? 0,
-          };
+        if (!output && attempt < MAX_ATTEMPTS) {
+          console.warn('DeepSeek returned empty content, retrying once');
+          continue;
         }
+
+        // Usage drives token billing; never let a missing usage block bill zero.
+        if (usage.totalTokens === 0) {
+          const promptTokens = this.estimateTokens(messages.map((m) => m.content).join('\n'));
+          const completionTokens = this.estimateTokens(output);
+          usage = { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
+        }
+
+        callbacks.onDone(usage);
+        return;
       }
-
-      callbacks.onDone(usage);
     } catch (error) {
       console.error('Chat completion error:', error);
       callbacks.onError(error instanceof Error ? error : new Error('Chat completion failed'));
@@ -101,22 +111,19 @@ export class ChatService {
     tier: ChatTier
   ): Promise<{ content: string; tokens: number }> {
     const config = getTierConfig(tier);
-    const { systemInstruction, contents } = toGeminiRequest(messages);
 
     try {
-      const response = await ai.models.generateContent({
-        model: env.GEMINI_CHAT_MODEL,
-        contents,
-        config: {
-          systemInstruction,
-          maxOutputTokens: config.maxTokens,
-          temperature: 0.7,
-        },
-      });
+      const response = await client.chat.completions.create({
+        model: env.DEEPSEEK_CHAT_MODEL,
+        messages,
+        max_tokens: config.maxTokens,
+        temperature: 0.7,
+        ...deepseekExtras,
+      } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
 
       return {
-        content: response.text || '',
-        tokens: response.usageMetadata?.totalTokenCount || 0,
+        content: response.choices[0]?.message?.content || '',
+        tokens: response.usage?.total_tokens || 0,
       };
     } catch (error) {
       console.error('Chat completion error:', error);

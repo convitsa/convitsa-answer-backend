@@ -21,6 +21,7 @@
     "mongoose": "^8.8.0",
     "nanoid": "^5.0.7",
     "officeparser": "^5.2.2",
+    "openai": "^4.73.0",
     "pdf-parse": "^2.4.5",
     "resend": "^4.0.0",
     "stripe": "^17.5.0",

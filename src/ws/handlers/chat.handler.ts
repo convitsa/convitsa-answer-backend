@@ -131,7 +131,7 @@ export async function handleChatMessage(
         fullResponse += chunk;
       },
       onDone: async (usage) => {
-        // Use actual token counts from Gemini
+        // Use actual token counts from the chat provider
         const { promptTokens, completionTokens, totalTokens } = usage;
         
         console.log(`📊 Token usage - Prompt: ${promptTokens}, Completion: ${completionTokens}, Total: ${totalTokens}`);
